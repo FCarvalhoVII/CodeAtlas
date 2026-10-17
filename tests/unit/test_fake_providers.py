@@ -29,7 +29,12 @@ def test_fake_embedding_dimensions_are_bounded(dimensions: int) -> None:
 
 def test_fake_llm_returns_configured_response_and_records_request() -> None:
     provider = FakeLLMProvider("Grounded response")
-    request = LLMRequest(question="Where?", context="Relevant source")
+    request = LLMRequest(
+        question="Where?",
+        instructions="Use only evidence.",
+        context="Relevant source",
+        allowed_evidence_ids=("evidence-1",),
+    )
 
     response = asyncio.run(provider.generate(request))
 

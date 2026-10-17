@@ -98,8 +98,11 @@ def test_indexing_settings_from_toml_and_environment(
     path = tmp_path / "codeatlas.toml"
     path.write_text(
         '[embedding]\nprovider = "fake"\ndimensions = 4\ntimeout_seconds = 10\n'
+        '[llm]\nprovider = "fake"\nmodel = "deterministic"\nmax_output_tokens = 500\n'
         "[index]\nbatch_size = 2\nmax_chunk_lines = 40\n"
-        "top_k = 5\nmin_score = 0.25\ncandidate_multiplier = 6\n",
+        "top_k = 5\nmin_score = 0.25\ncandidate_multiplier = 6\n"
+        "[answer]\nmax_context_chars = 1000\nmax_context_tokens = 250\n"
+        "max_evidence_chars = 500\ntimeout_seconds = 12\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("CODEATLAS_INDEX__BATCH_SIZE", "3")
@@ -111,3 +114,8 @@ def test_indexing_settings_from_toml_and_environment(
     assert settings.index.top_k == 5
     assert settings.index.min_score == 0.25
     assert settings.index.candidate_multiplier == 6
+    assert settings.llm.max_output_tokens == 500
+    assert settings.answer.max_context_chars == 1000
+    assert settings.answer.max_context_tokens == 250
+    assert settings.answer.max_evidence_chars == 500
+    assert settings.answer.timeout_seconds == 12
