@@ -8,6 +8,14 @@ timeout_seconds = 30
 [llm]
 provider = "fake"
 model = "deterministic"
+timeout_seconds = 60
+max_output_tokens = 1200
+
+[answer]
+max_context_chars = 24000
+max_context_tokens = 6000
+max_evidence_chars = 8000
+timeout_seconds = 75
 
 [index]
 top_k = 8

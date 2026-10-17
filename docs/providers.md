@@ -40,6 +40,30 @@ To stay conservatively within request limits without adding a tokenizer, the ada
 
 Enabling OpenAI sends the full text of each new or changed chunk to an external service and can incur charges. Configuration changes can resend all indexed chunks. Source includes comments, literals, docstrings, and any embedded secrets in selected files: CodeAtlas does not sanitize source before embedding it. Choose scanner exclusions appropriate for your repository. The adapter is tested against simulated transport/HTTP responses; live account/model availability is not verified by the automated suite.
 
+## OpenAI answer adapter
+
+The LLM remains offline by default: `provider = "fake"` and `model = "deterministic"` return a stable insufficient-context response. Enable OpenAI explicitly:
+
+```toml
+[llm]
+provider = "openai"
+model = "your-structured-output-capable-model"
+timeout_seconds = 60
+max_output_tokens = 1200
+
+[answer]
+max_context_chars = 24000
+max_context_tokens = 6000
+max_evidence_chars = 8000
+timeout_seconds = 75
+```
+
+The adapter uses the Responses API and `text.format` with a strict JSON Schema, following the [official OpenAI Structured Outputs guidance](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses). It sends a developer instruction plus a user message containing the question, allowed evidence IDs, and bounded repository evidence JSON. Requests set `store` to false. The response must complete with exactly one `output_text`; refusals, incomplete responses, malformed envelopes, and multiple text outputs map to safe `LLMProviderError` messages.
+
+There are two timeout layers. `llm.timeout_seconds` bounds the HTTP request and `answer.timeout_seconds` bounds the full provider coroutine. Cancellation cannot stop a blocking HTTP worker that has already started, but its result is discarded. Redirects and automatic retries are disabled. HTTP response bodies, prompts, source snippets, and credentials are never included in mapped errors or normal logs.
+
+Remote answering sends the developer's question and selected code chunks, including comments, docstrings, literals, and potential embedded secrets, to the configured provider. Source locations and symbols are included as context metadata. Index and answer only repositories whose data policy permits this transfer. The automated suite uses fake or simulated transports and requires no live API credentials.
+
 ## Extension points
 
-A new provider implements the protocol and supplies an accurate embedding profile. Map expected network/provider failures to `EmbeddingProviderError`, avoid logging submitted source or credentials, and preserve batch ordering. Contract tests should cover counts, dimensions, invalid vectors, and errors without relying on live services. The LLM protocol and fake remain available; production LLM integration belongs to Milestone 5.
+A new embedding provider implements its protocol and supplies an accurate embedding profile. A new LLM provider accepts `LLMRequest` and returns `LLMResponse` containing the structured JSON expected by the answer service. Map expected failures to the matching domain exception, avoid logging source or credentials, preserve embedding batch ordering, and test malformed output without relying on live services.

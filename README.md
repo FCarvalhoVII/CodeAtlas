@@ -2,7 +2,7 @@
 
 CodeAtlas will be built as a sequence of small, independently verifiable milestones. Each milestone must leave the repository in a working state: tests pass, public behavior is documented, and no later milestone is required to validate completed work.
 
-> **Current status:** Milestones 1–4 are implemented: Foundation, Repository Scanner and Python Parser, Indexing and Persistence, and Retrieval. Python APIs support incremental indexing and repository-scoped search with normalized scores, metadata reranking, overlap deduplication, and exact source references. Grounded LLM answers and the CLI follow in later milestones.
+> **Current status:** Milestones 1–5 are implemented: Foundation, Repository Scanner and Python Parser, Indexing and Persistence, Retrieval, and Grounded LLM Answers. Python APIs can index a repository, retrieve evidence, and produce structured answers whose citations are resolved to stored source references. The public CLI follows in Milestone 6.
 
 ## Development setup
 
@@ -101,6 +101,32 @@ for result in response.results:
 ```
 
 `index.top_k`, `index.min_score`, and `index.candidate_multiplier` configure the default result count, final-score threshold, and candidate expansion. The query provider must exactly match the provider, model, and configured dimensions recorded by indexing. See [retrieval and ranking](docs/retrieval.md) for score semantics, consistency guarantees, and extension points.
+
+## Ask a grounded question
+
+The answer service retrieves evidence, assembles a bounded context, invokes the configured LLM, and validates every returned evidence ID before resolving it to a real file and line range.
+
+```python
+import asyncio
+
+from codeatlas.answering.factory import create_answer_service
+from codeatlas.core.config import load_settings
+
+service = create_answer_service(load_settings())
+answer = asyncio.run(
+    service.answer_text(
+        repository_id="repository-id-from-the-index-manifest",
+        question="How are bearer tokens validated?",
+    )
+)
+
+print(answer.answer)
+for citation in answer.citations:
+    ref = citation.reference
+    print(f"{ref.file_path}:{ref.start_line}-{ref.end_line}")
+```
+
+The default fake LLM deterministically reports insufficient context, which keeps local development offline. To generate substantive answers, configure an explicit structured-output-capable LLM. Enabling the OpenAI LLM provider sends the question and selected source snippets to OpenAI. See [grounded answering](docs/answering.md) and [provider privacy](docs/providers.md) before enabling a remote provider.
 
 ## Delivery principles
 
