@@ -51,3 +51,41 @@ Ordinary definitions remain whole. Module-level text outside outermost definitio
 Symbols and sections larger than `SemanticChunker(max_lines=200)` are split into contiguous physical line ranges. This fallback can split a statement; it preserves exact source text and qualified symbol identity rather than claiming each part is independently parseable. The file byte limit also bounds unusually long individual lines. Blank-only parts are omitted.
 
 Every chunk carries repository identity, language, kind, and a source reference. IDs are deterministic hashes of repository identity, reference, kind, and content. Child chunks point to the first emitted chunk of their enclosing symbol when available. A module containing only definitions has no module section chunk, so its top-level definitions have no parent chunk ID. Source references still retain qualified symbol names.
+
+## Incremental indexing and persistence
+
+`IndexingService` orchestrates discovery, preparation, batched asynchronous embeddings, and storage. `create_indexing_service(load_settings())` assembles the configured embedding provider, chunker, and SQLite store. The factory uses `index.max_chunk_lines=100`; constructing `SemanticChunker` directly retains its 200-line default.
+
+```python
+import asyncio
+from pathlib import Path
+
+from codeatlas.indexing.service import IndexingService
+from codeatlas.providers.fake import FakeEmbeddingProvider
+from codeatlas.storage.sqlite import SQLiteVectorStore
+
+store = SQLiteVectorStore(Path(".codeatlas/index.sqlite3"))
+provider = FakeEmbeddingProvider()
+service = IndexingService(provider, store, batch_size=32)
+manifest = asyncio.run(service.index(Path("./my-project")))
+
+snapshot = store.load(manifest.repository.repository_id)
+assert snapshot is not None
+print(manifest.statistics)
+```
+
+The manifest persists schema version, repository identity, provider/model/dimension profile, pipeline fingerprint, actual vector dimensions, successful file metadata and hashes, generation ID, UTC update time, and last-run statistics. Chunk records retain full source references, source text, parent IDs, and vectors. `service.skipped` exposes current-run diagnostics; these diagnostic messages are not persisted.
+
+For a compatible index, unchanged hashes reuse existing vectors without parsing or embedding again. Changed/new files are prepared and embedded; deleted, ignored, binary, oversized, or no-longer-decodable files lose their previous records. Files with unsupported languages or Python syntax errors are reported and have no persisted successful hash, so later runs retry them. Empty Python files are successfully tracked with no chunks. An unreadable file/directory or unreadable `.gitignore` aborts publication, preventing an incomplete scan from deleting valid index entries.
+
+Changing provider, model, configured dimensions, scanner options, chunk size, or pipeline version rebuilds the repository's embeddings. Custom parser registries must supply a new `pipeline_version` when behavior changes. When remote dimensions are unspecified, the first vector establishes the dimension and all subsequent vectors must match. Nonfinite, zero, inconsistent, or missing vectors fail the run.
+
+All embedding batches finish before a write transaction starts. SQLite atomically replaces one repository's vectors and manifest. A failed batch, cancellation, validation error, or failed database transaction leaves the preceding generation intact. Optimistic generation checks reject a writer whose base generation was replaced by another indexing run. Cancellation during the HTTP adapter's blocking worker does not stop an already-started remote request, but no snapshot is published from a cancelled run.
+
+`VectorStore` is an infrastructure-neutral protocol. The initial `SQLiteVectorStore` stores JSON payloads in SQLite tables and computes exact cosine similarity in Python, restricted to an explicit repository ID. Multiple repositories can share a database. The adapter validates persisted manifests, repository ownership, dimensions, chunk counts, and parent existence on read. Unsupported schema versions fail explicitly; automatic migrations are not implemented.
+
+SQLite is deliberately simple and requires no external vector database or Docker. Search loads one repository snapshot and scans its vectors, so this adapter targets small local repositories, not high-volume search. Snapshot publication rewrites all records for that repository, while only changed files incur parsing/embedding work. Scan, preparation, and staging retain repository data in memory. SQLite work is synchronous and serialized on each call. A later adapter can implement the same contract with a specialized vector engine.
+
+The low-level `store.search(repository_id, vector, top_k=8)` returns stored chunks, similarity scores, and exact snippets. Query embedding, profile compatibility checks for user queries, reranking, and retrieval deduplication belong to Milestone 4.
+
+Keep index files private: they contain repository source in plain text. The default `.codeatlas/` directory is excluded by the scanner and Git ignore rules. If choosing a custom storage location inside a repository, add that directory to the repository's `.gitignore` or pass explicit scanner exclusions. Reopening the database in a new process requires only its path and repository ID; no source imports or provider credentials are needed to inspect stored data.
