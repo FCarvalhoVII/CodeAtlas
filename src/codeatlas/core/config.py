@@ -36,6 +36,8 @@ class IndexSettings(BaseModel):
     storage_path: Path = Path(".codeatlas")
     batch_size: int = Field(default=32, ge=1, le=2048)
     max_chunk_lines: int = Field(default=100, ge=1)
+    min_score: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
+    candidate_multiplier: int = Field(default=4, ge=1, le=20)
 
 
 class EmbeddingSettings(ProviderSettings):

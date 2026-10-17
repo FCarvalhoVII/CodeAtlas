@@ -18,4 +18,6 @@ class VectorStore(Protocol):
         repository_id: str,
         vector: list[float],
         top_k: int = 8,
+        *,
+        expected_generation: str,
     ) -> tuple[SearchResult, ...]: ...

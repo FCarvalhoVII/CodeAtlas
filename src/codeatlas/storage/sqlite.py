@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from codeatlas.core.exceptions import CorruptedIndexError, StorageError
+from codeatlas.core.exceptions import CorruptedIndexError, IncompatibleIndexError, StorageError
 from codeatlas.core.models import SearchResult
 from codeatlas.storage.models import EmbeddedChunk, IndexManifest, IndexSnapshot
 
@@ -116,12 +116,16 @@ class SQLiteVectorStore:
         repository_id: str,
         vector: list[float],
         top_k: int = 8,
+        *,
+        expected_generation: str,
     ) -> tuple[SearchResult, ...]:
         if top_k < 1:
             raise ValueError("top_k must be positive")
         snapshot = self.load(repository_id)
         if snapshot is None:
             return ()
+        if snapshot.manifest.generation != expected_generation:
+            raise IncompatibleIndexError("Index changed during retrieval; retry the query")
         if not snapshot.records:
             return ()
         if (

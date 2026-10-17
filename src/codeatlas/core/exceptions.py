@@ -35,3 +35,11 @@ class StorageError(CodeAtlasError):
 
 class CorruptedIndexError(StorageError):
     """Raised when persisted index data is invalid or incompatible."""
+
+
+class IndexNotFoundError(StorageError):
+    """Raised when a repository has no persisted index."""
+
+
+class IncompatibleIndexError(StorageError):
+    """Raised when a query provider cannot search an existing embedding space."""
