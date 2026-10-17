@@ -2,7 +2,7 @@
 
 CodeAtlas will be built as a sequence of small, independently verifiable milestones. Each milestone must leave the repository in a working state: tests pass, public behavior is documented, and no later milestone is required to validate completed work.
 
-> **Current status:** Milestones 1 (Foundation) and 2 (Repository Scanner and Python Parser) are implemented. Safe repository discovery, Python AST extraction, semantic chunking, and per-file diagnostics are available through Python APIs. Embedding, persistent indexing, retrieval, and the CLI are not implemented yet.
+> **Current status:** Milestones 1–3 are implemented: Foundation, Repository Scanner and Python Parser, and Indexing and Persistence. Python APIs support incremental indexing, deterministic offline embeddings, an opt-in OpenAI adapter, and local SQLite persistence with vector search. The retrieval pipeline, grounded answers, and CLI follow in later milestones.
 
 ## Development setup
 
@@ -55,6 +55,26 @@ for skipped in prepared.skipped:
 ```
 
 Scanner options are supplied through `ScanOptions`; they are not yet TOML settings. Unsupported languages and syntax errors produce per-file diagnostics. See [scanning, parsing, and chunking](docs/indexing.md) for filtering rules, source guarantees, and current limitations.
+
+## Build a persistent local index
+
+The default embedding provider is deterministic and offline, for testing the workflow. It does not provide meaningful semantic relevance.
+
+```python
+import asyncio
+from pathlib import Path
+
+from codeatlas.core.config import load_settings
+from codeatlas.indexing.factory import create_indexing_service
+
+service = create_indexing_service(load_settings())
+manifest = asyncio.run(service.index(Path("./my-project")))
+print(manifest.statistics)
+```
+
+SQLite stores the index at `<index.storage_path>/index.sqlite3` (default `.codeatlas/index.sqlite3` relative to the current working directory), without Docker. Re-running against unchanged files makes no embedding requests. Changed files replace their chunks; removed or excluded files lose their stored chunks. Provider/model, dimension, and pipeline configuration changes trigger re-embedding. Publication is atomic: a failed embedding batch preserves the previous index.
+
+Selecting `embedding.provider = "openai"` with an explicit model and `CODEATLAS_OPENAI_API_KEY` sends chunk contents to OpenAI. This is opt-in and may incur API charges. See [provider configuration and privacy](docs/providers.md) and the [indexing lifecycle](docs/indexing.md#incremental-indexing-and-persistence) before enabling it.
 
 ## Delivery principles
 
