@@ -2,7 +2,7 @@
 
 CodeAtlas will be built as a sequence of small, independently verifiable milestones. Each milestone must leave the repository in a working state: tests pass, public behavior is documented, and no later milestone is required to validate completed work.
 
-> **Current status:** Milestone 1 — Foundation is in progress. The package skeleton, validated domain models, configuration loader, structured logging, deterministic fake providers, tests, and CI configuration are available. Repository indexing is not implemented yet.
+> **Current status:** Milestones 1 (Foundation) and 2 (Repository Scanner and Python Parser) are implemented. Safe repository discovery, Python AST extraction, semantic chunking, and per-file diagnostics are available through Python APIs. Embedding, persistent indexing, retrieval, and the CLI are not implemented yet.
 
 ## Development setup
 
@@ -32,6 +32,29 @@ CODEATLAS_OPENAI_API_KEY=your-key
 ```
 
 Credentials and secret-like values are rejected in `codeatlas.toml`; provide them through environment variables. CodeAtlas does not automatically load `.env` files, preventing an unexpected local file from changing runtime behavior.
+
+## Scan and prepare a Python repository
+
+The scanner currently supports POSIX systems (Linux/macOS). It respects root and nested `.gitignore` rules, skips symlinks and generated directories, and bounds file reads. Preparation parses Python with the standard-library AST without importing or executing repository code.
+
+```python
+from pathlib import Path
+
+from codeatlas.indexing.scanner import RepositoryScanner, ScanOptions
+from codeatlas.parsing.service import RepositoryPreparer
+
+scan = RepositoryScanner(ScanOptions(include=("*.py", "*.pyi"))).scan(Path("."))
+prepared = RepositoryPreparer().prepare(scan)
+
+for chunk in prepared.chunks:
+    ref = chunk.reference
+    print(f"{ref.file_path}:{ref.start_line}-{ref.end_line} {ref.symbol_name}")
+
+for skipped in prepared.skipped:
+    print(f"Skipped {skipped.file_path}: {skipped.reason}")
+```
+
+Scanner options are supplied through `ScanOptions`; they are not yet TOML settings. Unsupported languages and syntax errors produce per-file diagnostics. See [scanning, parsing, and chunking](docs/indexing.md) for filtering rules, source guarantees, and current limitations.
 
 ## Delivery principles
 
