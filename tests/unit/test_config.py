@@ -89,3 +89,21 @@ def test_secret_from_environment_is_excluded_from_dump(
     assert settings.openai_api_key is not None
     assert "sk-private-value" not in repr(settings)
     assert "openai_api_key" not in settings.model_dump()
+
+
+def test_indexing_settings_from_toml_and_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "codeatlas.toml"
+    path.write_text(
+        '[embedding]\nprovider = "fake"\ndimensions = 4\ntimeout_seconds = 10\n'
+        "[index]\nbatch_size = 2\nmax_chunk_lines = 40\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEATLAS_INDEX__BATCH_SIZE", "3")
+    settings = load_settings(path)
+    assert settings.embedding.dimensions == 4
+    assert settings.embedding.timeout_seconds == 10
+    assert settings.index.batch_size == 3
+    assert settings.index.max_chunk_lines == 40
