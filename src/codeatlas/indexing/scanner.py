@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import os
@@ -188,8 +189,14 @@ class RepositoryScanner:
                         else "utf-8"
                     )
                     source = data.decode(encoding)
-                except (OSError, ValueError, UnicodeError, SyntaxError, LookupError):
-                    skip(relative, "unreadable, unsupported encoding, symlink, or oversized file")
+                except OSError as exc:
+                    skip(relative, "symlink" if exc.errno == errno.ELOOP else "file unreadable")
+                    continue
+                except (UnicodeError, SyntaxError, LookupError):
+                    skip(relative, "unsupported encoding")
+                    continue
+                except ValueError:
+                    skip(relative, "oversized or nonregular file")
                     continue
                 files.append(
                     SourceFile(

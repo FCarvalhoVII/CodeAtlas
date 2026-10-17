@@ -129,4 +129,4 @@ class SearchResult(DomainModel):
 
     chunk: CodeChunk
     score: float
-    snippet: str = Field(min_length=1)
+    snippet: SourceText

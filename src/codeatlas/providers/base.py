@@ -7,6 +7,7 @@ from typing import Protocol
 from pydantic import Field
 
 from codeatlas.core.models import DomainModel, SourceReference
+from codeatlas.storage.models import EmbeddingProfile
 
 
 class LLMRequest(DomainModel):
@@ -25,6 +26,11 @@ class LLMResponse(DomainModel):
 
 class EmbeddingProvider(Protocol):
     """Create vector representations for a batch of texts."""
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        """Identify the embedding space for incremental compatibility checks."""
+        ...
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed texts while preserving input order."""

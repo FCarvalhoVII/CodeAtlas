@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from codeatlas.providers.base import LLMRequest, LLMResponse
+from codeatlas.storage.models import EmbeddingProfile
 
 
 class FakeEmbeddingProvider:
@@ -14,6 +15,9 @@ class FakeEmbeddingProvider:
         if dimensions < 1 or dimensions > 32:
             raise ValueError("dimensions must be between 1 and 32")
         self.dimensions = dimensions
+        self.profile = EmbeddingProfile(
+            provider="fake", model="deterministic", dimensions=dimensions
+        )
         self.calls: list[list[str]] = []
 
     async def embed(self, texts: list[str]) -> list[list[float]]:

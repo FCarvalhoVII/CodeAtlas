@@ -34,6 +34,15 @@ class IndexSettings(BaseModel):
 
     top_k: int = Field(default=8, ge=1, le=100)
     storage_path: Path = Path(".codeatlas")
+    batch_size: int = Field(default=32, ge=1, le=2048)
+    max_chunk_lines: int = Field(default=100, ge=1)
+
+
+class EmbeddingSettings(ProviderSettings):
+    """Embedding-specific output and request settings."""
+
+    dimensions: int | None = Field(default=None, ge=1)
+    timeout_seconds: float = Field(default=30, gt=0, allow_inf_nan=False)
 
 
 class LoggingSettings(BaseModel):
@@ -54,7 +63,7 @@ class CodeAtlasSettings(BaseSettings):
         extra="forbid",
     )
 
-    embedding: ProviderSettings = ProviderSettings()
+    embedding: EmbeddingSettings = EmbeddingSettings()
     llm: ProviderSettings = ProviderSettings()
     index: IndexSettings = IndexSettings()
     logging: LoggingSettings = LoggingSettings()
