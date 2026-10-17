@@ -20,6 +20,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "pathspec>=1.0,<2",
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.2,<3",
 ]
