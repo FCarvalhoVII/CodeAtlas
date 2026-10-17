@@ -15,7 +15,14 @@ from pydantic_settings import (
 
 from codeatlas.core.exceptions import ConfigurationError
 
-_FORBIDDEN_FILE_KEY_PARTS = ("api_key", "password", "secret", "token")
+_FORBIDDEN_FILE_KEY_SUFFIXES = (
+    "api_key",
+    "authorization",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
 
 
 class ProviderSettings(BaseModel):
@@ -47,6 +54,24 @@ class EmbeddingSettings(ProviderSettings):
     timeout_seconds: float = Field(default=30, gt=0, allow_inf_nan=False)
 
 
+class LLMSettings(ProviderSettings):
+    """Text-generation provider request settings."""
+
+    timeout_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
+    max_output_tokens: int = Field(default=1200, ge=1)
+
+
+class AnswerSettings(BaseModel):
+    """Grounded-answer context and application timeout limits."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_context_chars: int = Field(default=24_000, ge=256)
+    max_context_tokens: int = Field(default=6_000, ge=64)
+    max_evidence_chars: int = Field(default=8_000, ge=64)
+    timeout_seconds: float = Field(default=75, gt=0, allow_inf_nan=False)
+
+
 class LoggingSettings(BaseModel):
     """Application logging controls."""
 
@@ -66,7 +91,8 @@ class CodeAtlasSettings(BaseSettings):
     )
 
     embedding: EmbeddingSettings = EmbeddingSettings()
-    llm: ProviderSettings = ProviderSettings()
+    llm: LLMSettings = LLMSettings()
+    answer: AnswerSettings = AnswerSettings()
     index: IndexSettings = IndexSettings()
     logging: LoggingSettings = LoggingSettings()
     openai_api_key: SecretStr | None = Field(default=None, repr=False, exclude=True)
@@ -90,7 +116,11 @@ def _find_forbidden_key(value: object, path: tuple[str, ...] = ()) -> str | None
     for raw_key, nested in value.items():
         key = str(raw_key)
         current_path = (*path, key)
-        if any(part in key.lower() for part in _FORBIDDEN_FILE_KEY_PARTS):
+        normalized_key = key.lower()
+        if any(
+            normalized_key == suffix or normalized_key.endswith(f"_{suffix}")
+            for suffix in _FORBIDDEN_FILE_KEY_SUFFIXES
+        ):
             return ".".join(current_path)
         found = _find_forbidden_key(nested, current_path)
         if found:

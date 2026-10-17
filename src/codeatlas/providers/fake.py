@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 from codeatlas.providers.base import LLMRequest, LLMResponse
 from codeatlas.storage.models import EmbeddingProfile
@@ -32,8 +33,17 @@ class FakeEmbeddingProvider:
 class FakeLLMProvider:
     """Return a configured response and record requests."""
 
-    def __init__(self, response: str = "Insufficient repository context.") -> None:
-        self.response = response
+    def __init__(self, response: str | None = None) -> None:
+        self.response = response or json.dumps(
+            {
+                "answer": "Insufficient repository context.",
+                "citation_ids": [],
+                "confidence": "insufficient",
+                "limitations": ["No supported evidence was supplied."],
+                "inferences": [],
+                "insufficient_context": True,
+            }
+        )
         self.requests: list[LLMRequest] = []
 
     async def generate(self, request: LLMRequest) -> LLMResponse:

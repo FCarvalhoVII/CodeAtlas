@@ -2,6 +2,7 @@
 
 from codeatlas.providers.base import EmbeddingProvider, LLMProvider, LLMRequest, LLMResponse
 from codeatlas.providers.fake import FakeEmbeddingProvider, FakeLLMProvider
+from codeatlas.providers.openai_llm import OpenAILLMProvider
 
 __all__ = [
     "EmbeddingProvider",
@@ -10,4 +11,5 @@ __all__ = [
     "LLMProvider",
     "LLMRequest",
     "LLMResponse",
+    "OpenAILLMProvider",
 ]

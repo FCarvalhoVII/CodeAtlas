@@ -14,7 +14,9 @@ class LLMRequest(DomainModel):
     """A provider-neutral text generation request."""
 
     question: str = Field(min_length=1)
-    context: str
+    instructions: str = Field(min_length=1)
+    context: str = Field(min_length=1)
+    allowed_evidence_ids: tuple[str, ...] = Field(min_length=1)
     allowed_references: tuple[SourceReference, ...] = ()
 
 
