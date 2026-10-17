@@ -5,8 +5,18 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+
+SourceText = Annotated[str, StringConstraints(strip_whitespace=False, min_length=1)]
 
 
 class DomainModel(BaseModel):
@@ -94,10 +104,12 @@ class ParsedSymbol(DomainModel):
     language: str = Field(min_length=1)
     symbol_name: str = Field(min_length=1)
     symbol_type: SymbolType
-    source_code: str = Field(min_length=1)
+    source_code: SourceText
     reference: SourceReference
     parent_symbol: str | None = None
     imports: tuple[str, ...] = ()
+    docstring: str | None = None
+    is_async: bool = False
 
 
 class CodeChunk(DomainModel):
@@ -106,7 +118,7 @@ class CodeChunk(DomainModel):
     chunk_id: str = Field(min_length=1)
     repository_id: str = Field(min_length=1)
     language: str = Field(min_length=1)
-    content: str = Field(min_length=1)
+    content: SourceText
     reference: SourceReference
     symbol_type: SymbolType
     parent_chunk_id: str | None = None
