@@ -46,7 +46,7 @@ References use inclusive physical line ranges. Decorators are included; indentat
 
 ## Semantic chunks
 
-Ordinary definitions remain whole. Module-level text outside outermost definitions becomes section chunks, preserving imports, constants, comments, and executable statements. Classes include their full bodies and also expose separate method chunks; nested definitions likewise overlap their enclosing symbol intentionally. Retrieval deduplication belongs to Milestone 4.
+Ordinary definitions remain whole. Module-level text outside outermost definitions becomes section chunks, preserving imports, constants, comments, and executable statements. Classes include their full bodies and also expose separate method chunks; nested definitions likewise overlap their enclosing symbol intentionally. Retrieval removes candidates when at least 80% of the shorter line range overlaps a higher-ranked result in the same file.
 
 Symbols and sections larger than `SemanticChunker(max_lines=200)` are split into contiguous physical line ranges. This fallback can split a statement; it preserves exact source text and qualified symbol identity rather than claiming each part is independently parseable. The file byte limit also bounds unusually long individual lines. Blank-only parts are omitted.
 
@@ -86,6 +86,6 @@ All embedding batches finish before a write transaction starts. SQLite atomicall
 
 SQLite is deliberately simple and requires no external vector database or Docker. Search loads one repository snapshot and scans its vectors, so this adapter targets small local repositories, not high-volume search. Snapshot publication rewrites all records for that repository, while only changed files incur parsing/embedding work. Scan, preparation, and staging retain repository data in memory. SQLite work is synchronous and serialized on each call. A later adapter can implement the same contract with a specialized vector engine.
 
-The low-level `store.search(repository_id, vector, top_k=8)` returns stored chunks, similarity scores, and exact snippets. Query embedding, profile compatibility checks for user queries, reranking, and retrieval deduplication belong to Milestone 4.
+The low-level `store.search(repository_id, vector, top_k=8, expected_generation=...)` returns stored chunks, cosine similarities, and exact snippets. The required generation prevents a query from silently crossing an index replacement. Application callers should use `SearchService`, which also validates the embedding profile and vector dimensions, reranks results, and deduplicates overlapping ranges.
 
 Keep index files private: they contain repository source in plain text. The default `.codeatlas/` directory is excluded by the scanner and Git ignore rules. If choosing a custom storage location inside a repository, add that directory to the repository's `.gitignore` or pass explicit scanner exclusions. Reopening the database in a new process requires only its path and repository ID; no source imports or provider credentials are needed to inspect stored data.
