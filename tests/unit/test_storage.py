@@ -31,17 +31,29 @@ def test_cosine_search_and_repository_isolation(
 ) -> None:
     store, snapshot = indexed
     record = snapshot.records[0]
-    results = store.search(snapshot.manifest.repository.repository_id, list(record.vector), top_k=1)
+    generation = snapshot.manifest.generation
+    results = store.search(
+        snapshot.manifest.repository.repository_id,
+        list(record.vector),
+        top_k=1,
+        expected_generation=generation,
+    )
     assert len(results) == 1
     assert results[0].chunk == record.chunk
     assert results[0].score == pytest.approx(1.0)
-    assert store.search("other-repository", list(record.vector)) == ()
+    assert (
+        store.search("other-repository", list(record.vector), expected_generation=generation) == ()
+    )
     assert store.load("other-repository") is None
     with pytest.raises(ValueError, match="top_k"):
-        store.search("other-repository", [], top_k=0)
+        store.search("other-repository", [], top_k=0, expected_generation=generation)
     for vector in ([0.0] * 8, [float("inf")] * 8, [1.0]):
         with pytest.raises(ValueError, match="Query vector"):
-            store.search(snapshot.manifest.repository.repository_id, vector)
+            store.search(
+                snapshot.manifest.repository.repository_id,
+                vector,
+                expected_generation=generation,
+            )
 
 
 @pytest.mark.parametrize(
@@ -135,7 +147,16 @@ def test_two_repositories_coexist(
     second = asyncio.run(IndexingService(FakeEmbeddingProvider(), store).index(second_root))
     assert store.load(original.manifest.repository.repository_id) == original
     assert second.repository.repository_id != original.manifest.repository.repository_id
-    assert len(store.search(second.repository.repository_id, list(original.records[0].vector))) == 1
+    assert (
+        len(
+            store.search(
+                second.repository.repository_id,
+                list(original.records[0].vector),
+                expected_generation=second.generation,
+            )
+        )
+        == 1
+    )
 
 
 def test_empty_index_search(tmp_path: Path) -> None:
@@ -144,4 +165,11 @@ def test_empty_index_search(tmp_path: Path) -> None:
     store = SQLiteVectorStore(tmp_path / "index.db")
     manifest = asyncio.run(IndexingService(FakeEmbeddingProvider(), store).index(root))
     assert manifest.vector_dimensions is None
-    assert store.search(manifest.repository.repository_id, [1.0]) == ()
+    assert (
+        store.search(
+            manifest.repository.repository_id,
+            [1.0],
+            expected_generation=manifest.generation,
+        )
+        == ()
+    )
