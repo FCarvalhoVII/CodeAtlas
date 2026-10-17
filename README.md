@@ -2,7 +2,7 @@
 
 CodeAtlas will be built as a sequence of small, independently verifiable milestones. Each milestone must leave the repository in a working state: tests pass, public behavior is documented, and no later milestone is required to validate completed work.
 
-> **Current status:** Milestones 1–3 are implemented: Foundation, Repository Scanner and Python Parser, and Indexing and Persistence. Python APIs support incremental indexing, deterministic offline embeddings, an opt-in OpenAI adapter, and local SQLite persistence with vector search. The retrieval pipeline, grounded answers, and CLI follow in later milestones.
+> **Current status:** Milestones 1–4 are implemented: Foundation, Repository Scanner and Python Parser, Indexing and Persistence, and Retrieval. Python APIs support incremental indexing and repository-scoped search with normalized scores, metadata reranking, overlap deduplication, and exact source references. Grounded LLM answers and the CLI follow in later milestones.
 
 ## Development setup
 
@@ -75,6 +75,32 @@ print(manifest.statistics)
 SQLite stores the index at `<index.storage_path>/index.sqlite3` (default `.codeatlas/index.sqlite3` relative to the current working directory), without Docker. Re-running against unchanged files makes no embedding requests. Changed files replace their chunks; removed or excluded files lose their stored chunks. Provider/model, dimension, and pipeline configuration changes trigger re-embedding. Publication is atomic: a failed embedding batch preserves the previous index.
 
 Selecting `embedding.provider = "openai"` with an explicit model and `CODEATLAS_OPENAI_API_KEY` sends chunk contents to OpenAI. This is opt-in and may incur API charges. See [provider configuration and privacy](docs/providers.md) and the [indexing lifecycle](docs/indexing.md#incremental-indexing-and-persistence) before enabling it.
+
+## Search an index
+
+Search embeds only the query, retrieves candidates from one repository and one index generation, then reranks and deduplicates the stored evidence. It does not invoke an LLM.
+
+```python
+import asyncio
+
+from codeatlas.core.config import load_settings
+from codeatlas.retrieval.factory import create_search_service
+
+service = create_search_service(load_settings())
+response = asyncio.run(
+    service.search_text(
+        repository_id="repository-id-from-the-index-manifest",
+        text="Where is authentication implemented?",
+    )
+)
+
+for result in response.results:
+    ref = result.reference
+    print(f"{result.score:.3f} {ref.file_path}:{ref.start_line}-{ref.end_line}")
+    print(result.snippet)
+```
+
+`index.top_k`, `index.min_score`, and `index.candidate_multiplier` configure the default result count, final-score threshold, and candidate expansion. The query provider must exactly match the provider, model, and configured dimensions recorded by indexing. See [retrieval and ranking](docs/retrieval.md) for score semantics, consistency guarantees, and extension points.
 
 ## Delivery principles
 
