@@ -1,0 +1,16 @@
+[embedding]
+provider = "fake"
+model = "deterministic"
+
+[llm]
+provider = "fake"
+model = "deterministic"
+
+[index]
+top_k = 8
+storage_path = ".codeatlas"
+
+[logging]
+level = "INFO"
+json = true
+
