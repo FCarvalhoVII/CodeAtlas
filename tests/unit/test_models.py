@@ -20,7 +20,16 @@ def test_source_reference_normalizes_windows_separator() -> None:
 
 @pytest.mark.parametrize(
     "file_path",
-    ["", ".", "../secret.py", "/tmp/source.py", "src/../../x.py", "C:\\tmp\\source.py"],
+    [
+        "",
+        ".",
+        "../secret.py",
+        "/tmp/source.py",
+        "src/../../x.py",
+        "C:\\tmp\\source.py",
+        "unsafe\npath.py",
+        "unsafe\x00path.py",
+    ],
 )
 def test_source_reference_rejects_path_outside_repository(file_path: str) -> None:
     with pytest.raises(ValidationError):

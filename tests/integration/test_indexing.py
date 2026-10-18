@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from codeatlas.core.config import CodeAtlasSettings, IndexSettings
-from codeatlas.core.exceptions import CorruptedIndexError, EmbeddingProviderError, StorageError
+from codeatlas.core.exceptions import (
+    CorruptedIndexError,
+    EmbeddingProviderError,
+    PartialIndexingError,
+    StorageError,
+)
 from codeatlas.indexing.factory import create_indexing_service
 from codeatlas.indexing.scanner import RepositoryScanner, ScanOptions
 from codeatlas.indexing.service import IndexingService
@@ -99,8 +104,10 @@ def test_interrupted_batches_never_publish_partial_index(tmp_path: Path, existin
         (root / "a.py").write_text("X = 3\n", encoding="utf-8")
         (root / "b.py").write_text("Y = 4\n", encoding="utf-8")
     before = store.load(repository_id)
-    with pytest.raises(EmbeddingProviderError, match="interruption"):
+    with pytest.raises(PartialIndexingError, match="previous index was preserved") as error:
         asyncio.run(IndexingService(InterruptedProvider(), store, batch_size=1).index(root))
+    assert error.value.total_batches == 2
+    assert error.value.failed_batch in {1, 2}
     assert store.load(repository_id) == before
 
 
@@ -210,6 +217,12 @@ def test_factory_builds_offline_service(tmp_path: Path) -> None:
         IndexingService(
             FakeEmbeddingProvider(), SQLiteVectorStore(tmp_path / "other.db"), batch_size=0
         )
+    with pytest.raises(ValueError, match="max_concurrency"):
+        IndexingService(
+            FakeEmbeddingProvider(),
+            SQLiteVectorStore(tmp_path / "concurrency.db"),
+            max_concurrency=0,
+        )
 
 
 def test_cancelled_indexing_leaves_previous_generation(tmp_path: Path) -> None:
@@ -257,3 +270,116 @@ def test_changed_file_reuses_unchanged_vectors(tmp_path: Path) -> None:
     snapshot = store.load(first.repository.repository_id)
     assert snapshot is not None
     assert [r for r in snapshot.records if r.chunk.reference.file_path == "b.py"] == retained
+
+
+def test_embedding_concurrency_is_bounded(tmp_path: Path) -> None:
+    root = repo(tmp_path)
+    (root / "c.py").write_text("def third():\n    return 3\n", encoding="utf-8")
+
+    class TrackingProvider(FakeEmbeddingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                return await super().embed(texts)
+            finally:
+                self.active -= 1
+
+    provider = TrackingProvider()
+    service = IndexingService(
+        provider,
+        SQLiteVectorStore(tmp_path / "bounded.db"),
+        batch_size=1,
+        max_concurrency=2,
+    )
+
+    manifest = asyncio.run(service.index(root))
+
+    assert manifest.chunk_count == 3
+    assert provider.peak == 2
+
+
+def test_failed_concurrent_batch_cancels_siblings_and_reports_progress(tmp_path: Path) -> None:
+    root = repo(tmp_path)
+    (root / "c.py").write_text("def third():\n    return 3\n", encoding="utf-8")
+
+    class FailingConcurrentProvider(FakeEmbeddingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls_started = 0
+            self.calls_cancelled = 0
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            self.calls_started += 1
+            if "first" in texts[0]:
+                await asyncio.sleep(0)
+                raise EmbeddingProviderError("sensitive provider detail")
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.calls_cancelled += 1
+                raise
+            return []
+
+    provider = FailingConcurrentProvider()
+    store = SQLiteVectorStore(tmp_path / "failed-concurrent.db")
+    service = IndexingService(provider, store, batch_size=1, max_concurrency=2)
+
+    with pytest.raises(PartialIndexingError) as error:
+        asyncio.run(service.index(root))
+
+    assert error.value.failed_batch == 1
+    assert error.value.total_batches == 3
+    assert "sensitive provider detail" not in str(error.value)
+    assert provider.calls_started == 2
+    assert provider.calls_cancelled == 1
+    assert store.load(RepositoryScanner().scan(root).repository.repository_id) is None
+
+
+def test_external_cancellation_cleans_up_all_embedding_tasks(tmp_path: Path) -> None:
+    root = repo(tmp_path)
+    (root / "c.py").write_text("def third():\n    return 3\n", encoding="utf-8")
+
+    class WaitingProvider(FakeEmbeddingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = 0
+            self.cancelled = 0
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            self.started += 1
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled += 1
+                raise
+            return []
+
+    provider = WaitingProvider()
+    store = SQLiteVectorStore(tmp_path / "cancel-cleanup.db")
+    service = IndexingService(provider, store, batch_size=1, max_concurrency=2)
+
+    async def cancel_during_index() -> None:
+        task = asyncio.create_task(service.index(root))
+        while provider.started < 2:
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not [
+            pending
+            for pending in asyncio.all_tasks()
+            if pending.get_name().startswith("codeatlas-embedding-") and not pending.done()
+        ]
+
+    asyncio.run(cancel_during_index())
+
+    assert provider.started == 2
+    assert provider.cancelled == 2
+    assert store.load(RepositoryScanner().scan(root).repository.repository_id) is None

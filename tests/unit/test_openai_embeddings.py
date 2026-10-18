@@ -108,8 +108,10 @@ def test_transport_failure_is_safe() -> None:
     async def transport(body: dict[str, object]) -> object:
         raise OSError("private-source")
 
-    provider = OpenAIEmbeddingProvider(SecretStr("private-test-key"), transport=transport)
-    with pytest.raises(EmbeddingProviderError, match="transport"):
+    provider = OpenAIEmbeddingProvider(
+        SecretStr("private-test-key"), transport=transport, retry_base_delay=0
+    )
+    with pytest.raises(EmbeddingProviderError, match="after 3 attempts"):
         asyncio.run(provider.embed(["text"]))
 
 
@@ -138,6 +140,8 @@ def test_factory_credentials_and_configuration(tmp_path: Path) -> None:
         OpenAIEmbeddingProvider(SecretStr(""))
     with pytest.raises(ValueError, match="timeout"):
         OpenAIEmbeddingProvider(SecretStr("key"), timeout=0)
+    with pytest.raises(ValueError, match="retry"):
+        OpenAIEmbeddingProvider(SecretStr("key"), max_attempts=0)
 
 
 def test_dimension_mismatch_rejected_by_adapter() -> None:
@@ -147,3 +151,61 @@ def test_dimension_mismatch_rejected_by_adapter() -> None:
     provider = OpenAIEmbeddingProvider(SecretStr("test"), dimensions=2, transport=transport)
     with pytest.raises(EmbeddingProviderError):
         asyncio.run(provider.embed(["text"]))
+
+
+def test_transient_transport_failure_retries_then_succeeds() -> None:
+    attempts = 0
+
+    async def transport(body: dict[str, object]) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise TimeoutError("private transient detail")
+        return {"data": [{"index": 0, "embedding": [1.0]}]}
+
+    provider = OpenAIEmbeddingProvider(
+        SecretStr("private-test-key"),
+        transport=transport,
+        max_attempts=3,
+        retry_base_delay=0,
+    )
+
+    assert asyncio.run(provider.embed(["text"])) == [[1.0]]
+    assert attempts == 3
+
+
+def test_cancellation_is_never_retried() -> None:
+    attempts = 0
+
+    async def transport(body: dict[str, object]) -> object:
+        nonlocal attempts
+        attempts += 1
+        raise asyncio.CancelledError
+
+    provider = OpenAIEmbeddingProvider(
+        SecretStr("private-test-key"), transport=transport, retry_base_delay=0
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(provider.embed(["text"]))
+    assert attempts == 1
+
+
+@pytest.mark.parametrize("status, expected_attempts", [(400, 1), (503, 3)])
+def test_http_retries_only_transient_statuses(status: int, expected_attempts: int) -> None:
+    provider = OpenAIEmbeddingProvider(
+        SecretStr("private-test-key"), max_attempts=3, retry_base_delay=0
+    )
+
+    def fail(*args: object, **kwargs: object) -> object:
+        raise urllib.error.HTTPError(
+            "https://api.openai.com", status, "private", Message(), io.BytesIO(b"private")
+        )
+
+    with patch("urllib.request.build_opener") as factory:
+        factory.return_value.open.side_effect = fail
+        with pytest.raises(EmbeddingProviderError) as error:
+            asyncio.run(provider.embed(["text"]))
+
+    assert factory.return_value.open.call_count == expected_attempts
+    assert "private" not in str(error.value)

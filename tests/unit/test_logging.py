@@ -16,7 +16,9 @@ def test_redact_handles_sensitive_keys_and_nested_values() -> None:
     value = {
         "api_key": "plain-secret",
         "nested": {"authorization": "Bearer abcdefghijklmnop"},
+        "request": {"prompt": "private prompt", "source_code": "private source"},
         "safe": "visible",
+        "estimated_context_tokens": 42,
     }
 
     result = redact(value)
@@ -24,7 +26,9 @@ def test_redact_handles_sensitive_keys_and_nested_values() -> None:
     assert result == {
         "api_key": "[REDACTED]",
         "nested": {"authorization": "[REDACTED]"},
+        "request": {"prompt": "[REDACTED]", "source_code": "[REDACTED]"},
         "safe": "visible",
+        "estimated_context_tokens": 42,
     }
 
 

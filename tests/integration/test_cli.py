@@ -87,7 +87,9 @@ def test_cli_maps_provider_failures(tmp_path: Path, monkeypatch: object) -> None
     result = runner.invoke(app, ["index", str(repository), "--config", str(config)])
 
     assert result.exit_code == ExitCode.PROVIDER
-    assert "Embedding service unavailable" in result.output
+    assert "Embedding batch 1/1 failed" in result.output
+    assert "previous index was preserved" in result.output
+    assert "Embedding service unavailable" not in result.output
 
 
 def test_cli_end_to_end_index_search_ask_status_and_clear(

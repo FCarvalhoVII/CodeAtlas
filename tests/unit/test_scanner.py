@@ -132,3 +132,17 @@ def test_repository_identity_can_be_resolved_without_scanning(tmp_path: Path) ->
     assert identity == RepositoryScanner().scan(tmp_path).repository
     with pytest.raises(InvalidRepositoryError):
         resolve_repository(tmp_path / "missing")
+
+
+def test_control_characters_in_paths_are_skipped_safely(tmp_path: Path) -> None:
+    write(tmp_path, "safe.py")
+    write(tmp_path, "unsafe\nname.py")
+    write(tmp_path, "unsafe\tdirectory/main.py")
+
+    result = RepositoryScanner().scan(tmp_path)
+
+    assert [file.metadata.file_path for file in result.files] == ["safe.py"]
+    assert {(item.file_path, item.reason) for item in result.skipped} >= {
+        ("unsafe\\nname.py", "unsafe path"),
+        ("unsafe\\tdirectory", "unsafe path"),
+    }

@@ -100,12 +100,33 @@ def test_database_corruption_schema_and_access_errors(tmp_path: Path) -> None:
     schema = tmp_path / "schema.db"
     with closing(sqlite3.connect(schema)) as connection, connection:
         connection.execute("PRAGMA user_version=99")
-    with pytest.raises(CorruptedIndexError, match="schema"):
+    with pytest.raises(CorruptedIndexError, match="SQLite index schema version 99"):
         SQLiteVectorStore(schema)
     with pytest.raises(StorageError, match="access"):
         SQLiteVectorStore(tmp_path)
     with pytest.raises(StorageError, match="directory"):
         SQLiteVectorStore(invalid / "index.db")
+    target = tmp_path / "target.db"
+    target.touch()
+    symlink = tmp_path / "symlink.db"
+    symlink.symlink_to(target)
+    with pytest.raises(StorageError, match="symbolic link"):
+        SQLiteVectorStore(symlink)
+
+
+def test_unsupported_manifest_schema_has_actionable_error(
+    indexed: tuple[SQLiteVectorStore, IndexSnapshot],
+) -> None:
+    store, snapshot = indexed
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        data = snapshot.manifest.model_dump(mode="json")
+        data["schema_version"] = 2
+        import json
+
+        connection.execute("UPDATE manifests SET payload=?", (json.dumps(data),))
+
+    with pytest.raises(CorruptedIndexError, match="manifest schema version 2"):
+        store.load(snapshot.manifest.repository.repository_id)
 
 
 def test_snapshot_rejects_inconsistent_data(
