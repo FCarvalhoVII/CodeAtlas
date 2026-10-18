@@ -13,6 +13,8 @@ class VectorStore(Protocol):
 
     def save(self, snapshot: IndexSnapshot, expected_generation: str | None) -> None: ...
 
+    def delete(self, repository_id: str, *, expected_generation: str) -> None: ...
+
     def search(
         self,
         repository_id: str,

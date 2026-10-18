@@ -81,6 +81,24 @@ class ScanResult(DomainModel):
     skipped: tuple[SkippedFile, ...]
 
 
+def resolve_repository(root: Path) -> RepositoryIdentity:
+    """Resolve and identify a repository without reading its contents."""
+
+    if os.name != "posix":
+        raise InvalidRepositoryError("Safe repository access currently requires POSIX")
+    try:
+        resolved = root.resolve(strict=True)
+        if not resolved.is_dir():
+            raise InvalidRepositoryError(f"Repository is not a directory: {root}")
+    except (OSError, RuntimeError) as exc:
+        raise InvalidRepositoryError(f"Cannot resolve repository: {root}") from exc
+    return RepositoryIdentity(
+        repository_id=hashlib.sha256(os.fsencode(resolved)).hexdigest(),
+        root_path=resolved,
+        name=resolved.name or str(resolved),
+    )
+
+
 def _read_at(directory_fd: int, name: str, limit: int) -> tuple[bytes, os.stat_result]:
     descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
     with os.fdopen(descriptor, "rb") as stream:
@@ -102,19 +120,8 @@ class RepositoryScanner:
         self.options = options or ScanOptions()
 
     def scan(self, root: Path) -> ScanResult:
-        if os.name != "posix":
-            raise InvalidRepositoryError("Safe repository scanning currently requires POSIX")
-        try:
-            resolved = root.resolve(strict=True)
-            if not resolved.is_dir():
-                raise InvalidRepositoryError(f"Repository is not a directory: {root}")
-        except (OSError, RuntimeError) as exc:
-            raise InvalidRepositoryError(f"Cannot resolve repository: {root}") from exc
-        repository = RepositoryIdentity(
-            repository_id=hashlib.sha256(os.fsencode(resolved)).hexdigest(),
-            root_path=resolved,
-            name=resolved.name or str(resolved),
-        )
+        repository = resolve_repository(root)
+        resolved = repository.root_path
         include = GitIgnoreSpec.from_lines(self.options.include)
         exclude = GitIgnoreSpec.from_lines((*_DEFAULT_EXCLUDES, *self.options.exclude))
         rules: dict[Path, tuple[tuple[Path, GitIgnoreSpec], ...]] = {}

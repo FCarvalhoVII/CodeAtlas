@@ -111,6 +111,26 @@ class SQLiteVectorStore:
                 (repository_id, snapshot.manifest.model_dump_json()),
             )
 
+    def delete(self, repository_id: str, *, expected_generation: str) -> None:
+        """Atomically remove one repository snapshot if it has not changed."""
+
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM manifests WHERE repository_id=?",
+                (repository_id,),
+            ).fetchone()
+            if row is None:
+                raise IncompatibleIndexError("Index changed before it could be removed")
+            try:
+                actual = IndexManifest.model_validate_json(row[0]).generation
+            except ValidationError:
+                raise CorruptedIndexError("Invalid index manifest") from None
+            if actual != expected_generation:
+                raise IncompatibleIndexError("Index changed before it could be removed")
+            connection.execute("DELETE FROM chunks WHERE repository_id=?", (repository_id,))
+            connection.execute("DELETE FROM manifests WHERE repository_id=?", (repository_id,))
+
     def search(
         self,
         repository_id: str,
