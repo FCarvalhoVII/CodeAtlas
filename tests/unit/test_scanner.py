@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from codeatlas.core.exceptions import InvalidRepositoryError
-from codeatlas.indexing.scanner import RepositoryScanner, ScanOptions
+from codeatlas.indexing.scanner import RepositoryScanner, ScanOptions, resolve_repository
 
 
 def write(root: Path, name: str, content: bytes = b"x = 1\n") -> Path:
@@ -124,3 +124,11 @@ def test_content_change_updates_hash_and_repository_identity_is_root_specific(
     assert first.repository == changed.repository
     assert first.files[0].metadata.content_hash != changed.files[0].metadata.content_hash
     assert scanner.scan(second_root).repository.repository_id != first.repository.repository_id
+
+
+def test_repository_identity_can_be_resolved_without_scanning(tmp_path: Path) -> None:
+    identity = resolve_repository(tmp_path)
+
+    assert identity == RepositoryScanner().scan(tmp_path).repository
+    with pytest.raises(InvalidRepositoryError):
+        resolve_repository(tmp_path / "missing")

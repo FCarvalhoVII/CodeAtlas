@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from codeatlas.core.exceptions import CorruptedIndexError, StorageError
+from codeatlas.core.exceptions import CorruptedIndexError, IncompatibleIndexError, StorageError
 from codeatlas.indexing.service import IndexingService
 from codeatlas.providers.fake import FakeEmbeddingProvider
 from codeatlas.storage.models import IndexSnapshot
@@ -173,3 +173,23 @@ def test_empty_index_search(tmp_path: Path) -> None:
         )
         == ()
     )
+
+
+def test_delete_is_repository_scoped_and_generation_safe(
+    indexed: tuple[SQLiteVectorStore, IndexSnapshot], tmp_path: Path
+) -> None:
+    store, original = indexed
+    second_root = tmp_path / "second-delete"
+    second_root.mkdir()
+    (second_root / "main.py").write_text("x = 1\n", encoding="utf-8")
+    second = asyncio.run(IndexingService(FakeEmbeddingProvider(), store).index(second_root))
+    repository_id = original.manifest.repository.repository_id
+
+    with pytest.raises(IncompatibleIndexError, match="changed"):
+        store.delete(repository_id, expected_generation="stale")
+    store.delete(repository_id, expected_generation=original.manifest.generation)
+
+    assert store.load(repository_id) is None
+    assert store.load(second.repository.repository_id) is not None
+    with pytest.raises(IncompatibleIndexError, match="changed"):
+        store.delete(repository_id, expected_generation=original.manifest.generation)
