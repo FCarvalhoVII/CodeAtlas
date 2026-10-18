@@ -25,6 +25,19 @@ class EmbeddingProviderError(ProviderError):
     """Raised when an embedding provider request fails."""
 
 
+class PartialIndexingError(EmbeddingProviderError):
+    """Report a failed embedding batch without publishing partial results."""
+
+    def __init__(self, failed_batch: int, total_batches: int, completed_batches: int) -> None:
+        self.failed_batch = failed_batch
+        self.total_batches = total_batches
+        self.completed_batches = completed_batches
+        super().__init__(
+            f"Embedding batch {failed_batch}/{total_batches} failed after "
+            f"{completed_batches} completed batches; the previous index was preserved"
+        )
+
+
 class LLMProviderError(ProviderError):
     """Raised when an LLM provider request fails."""
 

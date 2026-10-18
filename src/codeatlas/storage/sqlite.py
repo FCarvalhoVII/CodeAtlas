@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from collections.abc import Iterator
@@ -14,6 +15,9 @@ from codeatlas.core.exceptions import CorruptedIndexError, IncompatibleIndexErro
 from codeatlas.core.models import SearchResult
 from codeatlas.storage.models import EmbeddedChunk, IndexManifest, IndexSnapshot
 
+_DATABASE_SCHEMA_VERSION = 1
+_MANIFEST_SCHEMA_VERSION = 1
+
 
 class SQLiteVectorStore:
     """A dependency-free local store intended for small repository indexes."""
@@ -21,6 +25,8 @@ class SQLiteVectorStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         try:
+            if path.is_symlink():
+                raise StorageError("Index database path must not be a symbolic link")
             path.parent.mkdir(parents=True, exist_ok=True)
             with self._connection() as connection:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -37,11 +43,34 @@ class SQLiteVectorStore:
                         "chunk_id TEXT NOT NULL, payload TEXT NOT NULL, "
                         "PRIMARY KEY(repository_id, chunk_id))"
                     )
-                    connection.execute("PRAGMA user_version=1")
-                elif version != 1 or {row[0] for row in tables} != {"manifests", "chunks"}:
-                    raise CorruptedIndexError("Unsupported index schema; use a new index path")
+                    connection.execute(f"PRAGMA user_version={_DATABASE_SCHEMA_VERSION}")
+                elif version != _DATABASE_SCHEMA_VERSION or {row[0] for row in tables} != {
+                    "manifests",
+                    "chunks",
+                }:
+                    raise CorruptedIndexError(
+                        f"Unsupported SQLite index schema version {version}; "
+                        "clear or move the index before reindexing"
+                    )
         except OSError:
             raise StorageError("Cannot create index directory") from None
+
+    @staticmethod
+    def _manifest(payload: str) -> IndexManifest:
+        try:
+            raw = json.loads(payload)
+        except (TypeError, ValueError):
+            raise CorruptedIndexError("Invalid index manifest") from None
+        if not isinstance(raw, dict) or raw.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
+            version = raw.get("schema_version") if isinstance(raw, dict) else "unknown"
+            raise CorruptedIndexError(
+                f"Unsupported index manifest schema version {version}; "
+                "clear or move the index before reindexing"
+            )
+        try:
+            return IndexManifest.model_validate(raw)
+        except ValidationError:
+            raise CorruptedIndexError("Invalid index manifest") from None
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -75,12 +104,14 @@ class SQLiteVectorStore:
             return None
         try:
             snapshot = IndexSnapshot(
-                manifest=IndexManifest.model_validate_json(row[0]),
+                manifest=self._manifest(row[0]),
                 records=tuple(EmbeddedChunk.model_validate_json(item[0]) for item in records),
             )
             if snapshot.manifest.repository.repository_id != repository_id:
                 raise ValueError("Repository mismatch")
             return snapshot
+        except CorruptedIndexError:
+            raise
         except (ValidationError, ValueError):
             raise CorruptedIndexError("Invalid index manifest or chunk data") from None
 
@@ -92,10 +123,7 @@ class SQLiteVectorStore:
                 "SELECT payload FROM manifests WHERE repository_id=?",
                 (repository_id,),
             ).fetchone()
-            try:
-                actual = IndexManifest.model_validate_json(row[0]).generation if row else None
-            except ValidationError:
-                raise CorruptedIndexError("Invalid index manifest") from None
+            actual = self._manifest(row[0]).generation if row else None
             if actual != expected_generation:
                 raise StorageError("Index changed during indexing; retry the operation")
             connection.execute("DELETE FROM chunks WHERE repository_id=?", (repository_id,))
@@ -122,10 +150,7 @@ class SQLiteVectorStore:
             ).fetchone()
             if row is None:
                 raise IncompatibleIndexError("Index changed before it could be removed")
-            try:
-                actual = IndexManifest.model_validate_json(row[0]).generation
-            except ValidationError:
-                raise CorruptedIndexError("Invalid index manifest") from None
+            actual = self._manifest(row[0]).generation
             if actual != expected_generation:
                 raise IncompatibleIndexError("Index changed before it could be removed")
             connection.execute("DELETE FROM chunks WHERE repository_id=?", (repository_id,))

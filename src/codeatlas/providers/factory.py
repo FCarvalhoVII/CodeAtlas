@@ -27,6 +27,8 @@ def create_embedding_provider(settings: CodeAtlasSettings) -> EmbeddingProvider:
             embedding.model,
             dimensions=embedding.dimensions,
             timeout=embedding.timeout_seconds,
+            max_attempts=embedding.max_attempts,
+            retry_base_delay=embedding.retry_base_delay_seconds,
         )
     raise ConfigurationError(f"Unsupported embedding provider: {embedding.provider}")
 

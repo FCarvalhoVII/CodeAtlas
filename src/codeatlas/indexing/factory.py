@@ -14,5 +14,6 @@ def create_indexing_service(settings: CodeAtlasSettings) -> IndexingService:
         provider,
         SQLiteVectorStore(settings.index.storage_path / "index.sqlite3"),
         batch_size=settings.index.batch_size,
+        max_concurrency=settings.index.max_concurrency,
         preparer=RepositoryPreparer(chunker=SemanticChunker(settings.index.max_chunk_lines)),
     )

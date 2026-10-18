@@ -36,6 +36,7 @@ def _validate_relative_path(value: str) -> str:
         or windows_path.is_absolute()
         or bool(windows_path.drive)
         or ".." in path.parts
+        or any(ord(character) < 32 or ord(character) == 127 for character in normalized)
     ):
         raise ValueError("file_path must be a non-empty repository-relative path")
     return path.as_posix()

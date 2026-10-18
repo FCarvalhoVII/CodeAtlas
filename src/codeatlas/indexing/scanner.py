@@ -47,6 +47,14 @@ _LANGUAGES = {
 }
 
 
+def _unsafe_path(path: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in path)
+
+
+def _diagnostic_path(path: str) -> str:
+    return path.encode("unicode_escape", errors="backslashreplace").decode("ascii")
+
+
 class ScanOptions(DomainModel):
     """Gitignore-style filters; excludes take precedence over includes."""
 
@@ -174,6 +182,10 @@ class RepositoryScanner:
             for name in sorted(directories):
                 path = base / name
                 relative = path.relative_to(resolved).as_posix()
+                if _unsafe_path(relative):
+                    directories.remove(name)
+                    skip(_diagnostic_path(relative), "unsafe path")
+                    continue
                 if path.is_symlink() or ignored(path, True):
                     directories.remove(name)
                     skip(relative, "symlink" if path.is_symlink() else "ignored")
@@ -181,6 +193,9 @@ class RepositoryScanner:
             for name in sorted(names):
                 path = base / name
                 relative = path.relative_to(resolved).as_posix()
+                if _unsafe_path(relative):
+                    skip(_diagnostic_path(relative), "unsafe path")
+                    continue
                 if ignored(path, False) or not include.match_file(relative):
                     skip(relative, "ignored")
                     continue

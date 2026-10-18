@@ -8,7 +8,23 @@ import re
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 
-_SENSITIVE_KEY_PARTS = ("api_key", "authorization", "credential", "password", "secret", "token")
+_SENSITIVE_KEY_SUFFIXES = (
+    "api_key",
+    "authorization",
+    "content",
+    "credential",
+    "model_output",
+    "password",
+    "prompt",
+    "question",
+    "request_body",
+    "response_body",
+    "secret",
+    "snippet",
+    "source",
+    "source_code",
+    "token",
+)
 _TOKEN_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*"),
@@ -35,7 +51,10 @@ def redact(value: object, sensitive_values: tuple[str, ...] = ()) -> object:
         return {
             str(key): (
                 "[REDACTED]"
-                if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS)
+                if any(
+                    str(key).lower() == suffix or str(key).lower().endswith(f"_{suffix}")
+                    for suffix in _SENSITIVE_KEY_SUFFIXES
+                )
                 else redact(nested, sensitive_values)
             )
             for key, nested in value.items()

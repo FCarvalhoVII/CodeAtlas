@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -11,8 +12,9 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from codeatlas.core.exceptions import EmbeddingProviderError, StorageError
+from codeatlas.core.exceptions import EmbeddingProviderError, PartialIndexingError, StorageError
 from codeatlas.core.logging import log_event
+from codeatlas.core.models import CodeChunk
 from codeatlas.indexing.scanner import RepositoryScanner, ScanResult, SkippedFile
 from codeatlas.parsing.service import RepositoryPreparer
 from codeatlas.providers.base import EmbeddingProvider
@@ -36,15 +38,17 @@ class IndexingService:
         store: VectorStore,
         *,
         batch_size: int = 32,
+        max_concurrency: int = 4,
         scanner: RepositoryScanner | None = None,
         preparer: RepositoryPreparer | None = None,
         pipeline_version: str = "python-ast-v1",
     ) -> None:
-        if batch_size < 1:
-            raise ValueError("batch_size must be positive")
+        if batch_size < 1 or max_concurrency < 1:
+            raise ValueError("batch_size and max_concurrency must be positive")
         self.provider = provider
         self.store = store
         self.batch_size = batch_size
+        self.max_concurrency = max_concurrency
         self.scanner = scanner or RepositoryScanner()
         self.preparer = preparer or RepositoryPreparer()
         # Custom parsers must bump pipeline_version when their behavior changes.
@@ -59,6 +63,67 @@ class IndexingService:
             ).encode()
         ).hexdigest()
         self.skipped: tuple[SkippedFile, ...] = ()
+
+    async def _embed_batches(
+        self,
+        repository_id: str,
+        chunks: tuple[CodeChunk, ...],
+    ) -> list[tuple[tuple[CodeChunk, ...], list[list[float]]]]:
+        """Embed with bounded concurrency and clean up every task on failure."""
+
+        batches = [
+            chunks[offset : offset + self.batch_size]
+            for offset in range(0, len(chunks), self.batch_size)
+        ]
+        if not batches:
+            return []
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+        aborted = asyncio.Event()
+        completed = 0
+
+        async def run(
+            batch_number: int, batch: tuple[CodeChunk, ...]
+        ) -> tuple[tuple[CodeChunk, ...], list[list[float]]]:
+            nonlocal completed
+            async with semaphore:
+                if aborted.is_set():
+                    raise asyncio.CancelledError
+                log_event(
+                    _LOGGER,
+                    "embeddings_requested",
+                    repository_id=repository_id,
+                    batch=batch_number,
+                    total_batches=len(batches),
+                    count=len(batch),
+                )
+                try:
+                    vectors = await self.provider.embed([chunk.content for chunk in batch])
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    aborted.set()
+                    raise PartialIndexingError(batch_number, len(batches), completed) from None
+                completed += 1
+                return batch, vectors
+
+        tasks = [
+            asyncio.create_task(run(number, batch), name=f"codeatlas-embedding-{number}")
+            for number, batch in enumerate(batches, start=1)
+        ]
+        try:
+            return list(await asyncio.gather(*tasks))
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            log_event(
+                _LOGGER,
+                "index_staging_aborted",
+                repository_id=repository_id,
+                completed_batches=completed,
+                total_batches=len(batches),
+            )
+            raise
 
     async def index(self, root: Path) -> IndexManifest:
         scan = self.scanner.scan(root)
@@ -97,12 +162,7 @@ class IndexingService:
         )
         dimensions = previous.manifest.vector_dimensions if compatible and previous else None
         records = list(retained)
-        for offset in range(0, len(prepared.chunks), self.batch_size):
-            batch = prepared.chunks[offset : offset + self.batch_size]
-            log_event(
-                _LOGGER, "embeddings_requested", repository_id=repository_id, count=len(batch)
-            )
-            vectors = await self.provider.embed([chunk.content for chunk in batch])
+        for batch, vectors in await self._embed_batches(repository_id, prepared.chunks):
             if len(vectors) != len(batch):
                 raise EmbeddingProviderError(
                     "Embedding provider returned an incorrect vector count"

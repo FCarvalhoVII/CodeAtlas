@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import urllib.error
 import urllib.request
 from collections.abc import Awaitable, Callable
@@ -12,10 +13,17 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, SecretStr, StrictFloat, StrictInt, ValidationError
 
 from codeatlas.core.exceptions import ConfigurationError, EmbeddingProviderError
+from codeatlas.providers.retry import retry_transient
 from codeatlas.providers.validation import validate_vectors
 from codeatlas.storage.models import EmbeddingProfile
 
 Transport = Callable[[dict[str, object]], Awaitable[object]]
+_TRANSIENT_HTTP_STATUSES = frozenset({408, 409, 429})
+_LOGGER = logging.getLogger(__name__)
+
+
+class _TransientEmbeddingError(Exception):
+    """Internal marker for retryable failures with no sensitive detail."""
 
 
 class _Embedding(BaseModel):
@@ -52,15 +60,21 @@ class OpenAIEmbeddingProvider:
         *,
         dimensions: int | None = None,
         timeout: float = 30,
+        max_attempts: int = 3,
+        retry_base_delay: float = 0.25,
         transport: Transport | None = None,
     ) -> None:
         if not api_key.get_secret_value().strip():
             raise ConfigurationError("Set CODEATLAS_OPENAI_API_KEY for OpenAI embeddings")
         if timeout <= 0:
             raise ValueError("timeout must be positive")
+        if max_attempts < 1 or retry_base_delay < 0:
+            raise ValueError("retry settings are invalid")
         self.profile = EmbeddingProfile(provider="openai", model=model, dimensions=dimensions)
         self._api_key = api_key
         self.timeout = timeout
+        self.max_attempts = max_attempts
+        self.retry_base_delay = retry_base_delay
         self._transport = transport
 
     def _post(self, body: dict[str, object]) -> object:
@@ -81,11 +95,36 @@ class OpenAIEmbeddingProvider:
         except urllib.error.HTTPError as exc:
             status = exc.code
             exc.close()
+            if status in _TRANSIENT_HTTP_STATUSES or status >= 500:
+                raise _TransientEmbeddingError from None
             raise EmbeddingProviderError(
                 f"OpenAI embeddings request failed (HTTP {status})"
             ) from None
-        except (OSError, ValueError):
-            raise EmbeddingProviderError("OpenAI embeddings request failed or timed out") from None
+        except OSError:
+            raise _TransientEmbeddingError from None
+        except ValueError:
+            raise EmbeddingProviderError("OpenAI embeddings returned an invalid response") from None
+
+    async def _request(self, body: dict[str, object]) -> object:
+        try:
+            if self._transport:
+                return await self._transport(body)
+            return await asyncio.to_thread(self._post, body)
+        except _TransientEmbeddingError:
+            raise
+        except OSError:
+            raise _TransientEmbeddingError from None
+
+    @staticmethod
+    def _log_retry(failed_attempt: int, delay: float) -> None:
+        _LOGGER.warning(
+            "embedding_request_retry",
+            extra={
+                "event": "embedding_request_retry",
+                "failed_attempt": failed_attempt,
+                "retry_delay_seconds": delay,
+            },
+        )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -109,10 +148,12 @@ class OpenAIEmbeddingProvider:
         if self.profile.dimensions is not None:
             body["dimensions"] = self.profile.dimensions
         try:
-            raw = (
-                await self._transport(body)
-                if self._transport
-                else await asyncio.to_thread(self._post, body)
+            raw = await retry_transient(
+                lambda: self._request(body),
+                retry_on=(_TransientEmbeddingError,),
+                max_attempts=self.max_attempts,
+                base_delay=self.retry_base_delay,
+                on_retry=self._log_retry,
             )
             response = _Response.model_validate(raw)
             ordered = sorted(response.data, key=lambda item: item.index)
@@ -121,7 +162,11 @@ class OpenAIEmbeddingProvider:
             return validate_vectors([item.embedding for item in ordered], self.profile.dimensions)
         except EmbeddingProviderError:
             raise
-        except (ValidationError, ValueError, TypeError, OSError):
+        except _TransientEmbeddingError:
+            raise EmbeddingProviderError(
+                f"OpenAI embeddings request failed after {self.max_attempts} attempts"
+            ) from None
+        except (ValidationError, ValueError, TypeError):
             raise EmbeddingProviderError(
                 "OpenAI embeddings returned an invalid response or transport failed"
             ) from None
