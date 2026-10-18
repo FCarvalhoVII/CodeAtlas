@@ -1,6 +1,6 @@
 # Contributing to CodeAtlas
 
-CodeAtlas is in early development. Small, tested changes that advance the current roadmap milestone are preferred.
+CodeAtlas accepts focused, tested changes that preserve its public contracts, security boundaries, and grounded-citation guarantees.
 
 ## Development setup
 
@@ -16,8 +16,15 @@ Activate the virtual environment using the command appropriate for your shell, t
 ```bash
 ruff check .
 ruff format --check .
-mypy src tests
+mypy src tests benchmarks
 pytest
+```
+
+Build the distributions and run the offline benchmark when changing packaging, indexing, storage, or retrieval:
+
+```bash
+python -m build
+python benchmarks/benchmark_local.py
 ```
 
 ## Change requirements
@@ -31,4 +38,8 @@ pytest
 ## Pull requests
 
 Keep pull requests focused on one coherent change. Describe the motivation, implementation tradeoffs, tests performed, and any known limitations.
+
+## Release process
+
+Release preparation follows [RELEASE.md](RELEASE.md). Do not tag a release until the full Linux/macOS CI matrix and clean-wheel smoke test pass. Update the version and changelog together, inspect distribution contents, and verify the published wheel in a fresh environment.
 

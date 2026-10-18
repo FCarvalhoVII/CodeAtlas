@@ -1,90 +1,215 @@
-# CodeAtlas Implementation Roadmap
+# CodeAtlas
 
-CodeAtlas will be built as a sequence of small, independently verifiable milestones. Each milestone must leave the repository in a working state: tests pass, public behavior is documented, and no later milestone is required to validate completed work.
+CodeAtlas is a local-first codebase intelligence tool for Python repositories. It scans source safely, creates an incremental vector index, retrieves relevant code for natural-language queries, and produces answers whose citations are validated against stored file paths and line ranges.
 
-> **Current status:** Milestones 1–6 are implemented. CodeAtlas can scan and incrementally index a Python repository, retrieve evidence, produce grounded answers with validated citations, and expose the complete workflow through a stable CLI. Hardening and the `v0.1.0` release follow in Milestone 7.
+The project provides a command-line interface and typed Python application services. SQLite is the only storage dependency, so no database server or Docker setup is required.
 
-## Development setup
+## Features
 
-CodeAtlas requires Python 3.11 or newer. Create a virtual environment and install the project with its development dependencies:
+- Safe POSIX repository scanning without importing or executing target code.
+- Root and nested `.gitignore` support, bounded file reads, and rejection of discovered symlinks.
+- Python AST parsing with modules, classes, functions, methods, imports, docstrings, parents, and exact source ranges.
+- Semantic chunking that preserves source text and symbol relationships.
+- Incremental indexing based on file hashes.
+- Atomic, repository-scoped SQLite snapshots with schema and generation validation.
+- Bounded concurrent embedding batches with cancellation cleanup and partial-failure diagnostics.
+- Semantic retrieval, metadata reranking, score thresholds, and overlap deduplication.
+- Structured LLM answers with application-validated evidence IDs and source citations.
+- Deterministic offline providers for development and tests.
+- Optional OpenAI embedding and answer providers with explicit privacy boundaries.
+- Stable CLI exit codes, structured logging, content redaction, and automation support.
+
+## Requirements
+
+- Python 3.11 or newer.
+- Linux or macOS for safe repository scanning.
+- No external service for the default offline workflow.
+- An OpenAI API key only when an OpenAI provider is explicitly selected.
+
+## Installation
+
+Install from a local checkout:
 
 ```bash
+cd CodeAtlas
 python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e "."
+```
+
+For development, install the quality and packaging tools:
+
+```bash
 python -m pip install -e ".[dev]"
 ```
 
-Run the quality gates:
+Verify the CLI:
 
 ```bash
-ruff check .
-ruff format --check .
-mypy src tests
-pytest
+codeatlas --help
 ```
-
-## Configuration
-
-Copy `codeatlas.toml.example` to `codeatlas.toml` for project-level settings. Environment variables override TOML values and use `__` for nested keys:
-
-```bash
-CODEATLAS_INDEX__TOP_K=12
-CODEATLAS_OPENAI_API_KEY=your-key
-```
-
-Credentials and secret-like values are rejected in `codeatlas.toml`; provide them through environment variables. CodeAtlas does not automatically load `.env` files, preventing an unexpected local file from changing runtime behavior.
 
 ## Quick start
 
-Index the current repository with the default deterministic, offline providers:
+The default configuration is fully offline. It is useful for exercising the workflow, although fake embeddings do not provide meaningful semantic relevance and the fake LLM intentionally returns an insufficient-context answer.
 
 ```bash
-codeatlas index .
-codeatlas status
-codeatlas search "Where is configuration loaded?"
-codeatlas ask "How is configuration loaded?"
+codeatlas index ./my-project
+codeatlas status --repository ./my-project
+codeatlas search "Where is configuration loaded?" --repository ./my-project
+codeatlas ask "How is configuration loaded?" --repository ./my-project
 ```
 
-The default fake LLM reports insufficient context by design. To receive substantive grounded answers, select an LLM in `codeatlas.toml` and provide its credential through the environment. For example:
+Search results and answer citations use repository-relative source references such as:
 
-```toml
-[llm]
-provider = "openai"
-model = "your-structured-output-capable-model"
+```text
+src/codeatlas/core/config.py:134-159 (src.codeatlas.core.config.load_settings)
 ```
+
+## How it works
+
+```mermaid
+flowchart LR
+    R[Repository] --> S[Safe scanner]
+    S --> P[Python AST parser]
+    P --> C[Semantic chunks]
+    C --> E[Embedding provider]
+    E --> D[(SQLite index)]
+    Q[Query] --> QE[Query embedding]
+    QE --> D
+    D --> RR[Retrieve, rerank, deduplicate]
+    RR --> SR[Search results]
+    RR --> B[Bounded evidence context]
+    B --> L[LLM provider]
+    L --> V[Citation validation]
+    V --> A[Grounded answer]
+```
+
+Indexing reads each accepted file once, hashes and parses the same in-memory bytes, embeds only changed chunks, then publishes the complete snapshot in one transaction. A failed or cancelled run leaves the previous index generation intact.
+
+Search embeds the query with the same provider profile recorded in the index, computes exact cosine similarity within one repository and generation, reranks candidates using symbol and file metadata, and removes heavily overlapping ranges.
+
+Answering places the best evidence under explicit character and token-estimate budgets. The LLM selects opaque evidence IDs rather than writing source locations. CodeAtlas rejects unknown, duplicate, malformed, or missing citations and resolves accepted IDs to stored references itself.
+
+See [Architecture](docs/architecture.md), [Indexing](docs/indexing.md), [Retrieval](docs/retrieval.md), and [Grounded answering](docs/answering.md) for the detailed contracts.
+
+## CLI
+
+### Index a repository
+
+```bash
+codeatlas index <repository-path> [--config PATH]
+```
+
+The command scans and incrementally updates the selected repository. Its output includes the resolved root, generation, file counts, embedded chunks, unchanged files, deletions, and skipped files.
+
+### Search without an LLM
+
+```bash
+codeatlas search <query> [--repository PATH] [--top-k N] [--config PATH]
+```
+
+Search prints ranked source snippets with scores, symbols, paths, and inclusive line ranges. `--repository` defaults to the current directory.
+
+### Ask a grounded question
+
+```bash
+codeatlas ask <question> [--repository PATH] [--top-k N] [--config PATH]
+```
+
+Ask prints the answer, confidence, validated sources, explicit inferences, and limitations. If the evidence is insufficient, the result says so instead of generating an uncited answer.
+
+### Inspect or remove an index
+
+```bash
+codeatlas status [--repository PATH] [--config PATH]
+codeatlas clear [--repository PATH] [--config PATH]
+codeatlas clear --repository PATH --yes
+```
+
+`clear` removes only the selected repository snapshot. It prompts by default; `--yes` or `-y` enables automation. See the [CLI guide](docs/cli.md) for complete output and exit-code documentation.
+
+## Configuration
+
+CodeAtlas reads `./codeatlas.toml` when present. Pass `--config PATH` to select another file. Environment variables override TOML and use `CODEATLAS_` plus `__` between nested keys:
+
+```bash
+export CODEATLAS_INDEX__TOP_K=12
+export CODEATLAS_INDEX__MAX_CONCURRENCY=2
+```
+
+Copy the complete example:
+
+```bash
+cp codeatlas.toml.example codeatlas.toml
+```
+
+The main settings and defaults are:
+
+| Section | Setting | Default | Purpose |
+| --- | --- | --- | --- |
+| `embedding` | `provider` | `fake` | Embedding adapter. |
+| `embedding` | `model` | `deterministic` | Embedding model identifier. |
+| `embedding` | `dimensions` | unset (`8` for fake) | Requested or fake vector size. |
+| `embedding` | `timeout_seconds` | `30` | Per-request timeout. |
+| `embedding` | `max_attempts` | `3` | Total attempts for transient embedding failures. |
+| `embedding` | `retry_base_delay_seconds` | `0.25` | Initial exponential retry delay. |
+| `llm` | `provider` | `fake` | Structured-answer provider. |
+| `llm` | `model` | `deterministic` | LLM model identifier. |
+| `llm` | `timeout_seconds` | `60` | Provider HTTP timeout. |
+| `llm` | `max_output_tokens` | `1200` | Maximum generated output. |
+| `answer` | `max_context_chars` | `24000` | Serialized evidence character budget. |
+| `answer` | `max_context_tokens` | `6000` | Conservative evidence token estimate. |
+| `answer` | `max_evidence_chars` | `8000` | Maximum snippet prefix per result. |
+| `answer` | `timeout_seconds` | `75` | Full LLM coroutine timeout. |
+| `index` | `storage_path` | `.codeatlas` | Directory containing `index.sqlite3`. |
+| `index` | `batch_size` | `32` | Chunks per embedding request. |
+| `index` | `max_concurrency` | `4` | Maximum active embedding batches. |
+| `index` | `max_chunk_lines` | `100` | Chunk split threshold. |
+| `index` | `top_k` | `8` | Default final retrieval count. |
+| `index` | `min_score` | `0.0` | Default final-score threshold. |
+| `index` | `candidate_multiplier` | `4` | Retrieval expansion before reranking. |
+| `logging` | `level` | `INFO` | Root logging level. |
+| `logging` | `json` | `true` | JSON or human-readable log output. |
+
+Relative storage paths are resolved from the process working directory. Use the same working directory and configuration for all commands, or configure an absolute storage path.
+
+### Credentials
+
+Secrets and secret-like keys are rejected in TOML. Supply credentials through the environment:
 
 ```bash
 export CODEATLAS_OPENAI_API_KEY=your-key
-codeatlas ask "How is configuration loaded?"
 ```
 
-`search`, `ask`, `status`, and `clear` use the current directory as the repository unless `--repository PATH` is supplied. All commands read `./codeatlas.toml` by default; use `--config PATH` to select another file. The SQLite storage path is resolved from the directory where the command runs. See the [CLI guide](docs/cli.md) for output, exit codes, automation, and troubleshooting.
+CodeAtlas does not automatically load `.env` files. This prevents an unexpected local file from changing runtime credentials or provider selection.
 
-## Scan and prepare a Python repository
+## OpenAI providers
 
-The scanner currently supports POSIX systems (Linux/macOS). It respects root and nested `.gitignore` rules, skips symlinks and generated directories, and bounds file reads. Preparation parses Python with the standard-library AST without importing or executing repository code.
+Enable meaningful remote embeddings and structured answers explicitly:
 
-```python
-from pathlib import Path
+```toml
+[embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+timeout_seconds = 30
+max_attempts = 3
+retry_base_delay_seconds = 0.25
 
-from codeatlas.indexing.scanner import RepositoryScanner, ScanOptions
-from codeatlas.parsing.service import RepositoryPreparer
-
-scan = RepositoryScanner(ScanOptions(include=("*.py", "*.pyi"))).scan(Path("."))
-prepared = RepositoryPreparer().prepare(scan)
-
-for chunk in prepared.chunks:
-    ref = chunk.reference
-    print(f"{ref.file_path}:{ref.start_line}-{ref.end_line} {ref.symbol_name}")
-
-for skipped in prepared.skipped:
-    print(f"Skipped {skipped.file_path}: {skipped.reason}")
+[llm]
+provider = "openai"
+model = "your-structured-output-capable-model"
+timeout_seconds = 60
+max_output_tokens = 1200
 ```
 
-Scanner options are supplied through `ScanOptions`; they are not yet TOML settings. Unsupported languages and syntax errors produce per-file diagnostics. See [scanning, parsing, and chunking](docs/indexing.md) for filtering rules, source guarantees, and current limitations.
+OpenAI embeddings receive full new or changed chunk text. OpenAI answers receive the question, allowed evidence IDs, source metadata, and selected snippets. Remote operations may incur charges. Embeddings retry only connection failures, timeouts, HTTP 408, 409, 429, and 5xx; LLM generation is not retried automatically.
 
-## Build a persistent local index
+Review [Provider configuration and privacy](docs/providers.md) before enabling remote providers.
 
-The default embedding provider is deterministic and offline, for testing the workflow. It does not provide meaningful semantic relevance.
+## Python API
+
+### Index
 
 ```python
 import asyncio
@@ -93,18 +218,13 @@ from pathlib import Path
 from codeatlas.core.config import load_settings
 from codeatlas.indexing.factory import create_indexing_service
 
-service = create_indexing_service(load_settings())
-manifest = asyncio.run(service.index(Path("./my-project")))
+settings = load_settings()
+manifest = asyncio.run(create_indexing_service(settings).index(Path("./my-project")))
+print(manifest.repository.repository_id)
 print(manifest.statistics)
 ```
 
-SQLite stores the index at `<index.storage_path>/index.sqlite3` (default `.codeatlas/index.sqlite3` relative to the current working directory), without Docker. Re-running against unchanged files makes no embedding requests. Changed files replace their chunks; removed or excluded files lose their stored chunks. Provider/model, dimension, and pipeline configuration changes trigger re-embedding. Publication is atomic: a failed embedding batch preserves the previous index.
-
-Selecting `embedding.provider = "openai"` with an explicit model and `CODEATLAS_OPENAI_API_KEY` sends chunk contents to OpenAI. This is opt-in and may incur API charges. See [provider configuration and privacy](docs/providers.md) and the [indexing lifecycle](docs/indexing.md#incremental-indexing-and-persistence) before enabling it.
-
-## Search an index
-
-Search embeds only the query, retrieves candidates from one repository and one index generation, then reranks and deduplicates the stored evidence. It does not invoke an LLM.
+### Search
 
 ```python
 import asyncio
@@ -116,21 +236,16 @@ service = create_search_service(load_settings())
 response = asyncio.run(
     service.search_text(
         repository_id="repository-id-from-the-index-manifest",
-        text="Where is authentication implemented?",
+        text="Where are bearer tokens validated?",
     )
 )
 
 for result in response.results:
     ref = result.reference
-    print(f"{result.score:.3f} {ref.file_path}:{ref.start_line}-{ref.end_line}")
-    print(result.snippet)
+    print(result.score, ref.file_path, ref.start_line, ref.end_line)
 ```
 
-`index.top_k`, `index.min_score`, and `index.candidate_multiplier` configure the default result count, final-score threshold, and candidate expansion. The query provider must exactly match the provider, model, and configured dimensions recorded by indexing. See [retrieval and ranking](docs/retrieval.md) for score semantics, consistency guarantees, and extension points.
-
-## Ask a grounded question
-
-The answer service retrieves evidence, assembles a bounded context, invokes the configured LLM, and validates every returned evidence ID before resolving it to a real file and line range.
+### Answer
 
 ```python
 import asyncio
@@ -148,285 +263,88 @@ answer = asyncio.run(
 
 print(answer.answer)
 for citation in answer.citations:
-    ref = citation.reference
-    print(f"{ref.file_path}:{ref.start_line}-{ref.end_line}")
+    print(citation.reference)
 ```
 
-The default fake LLM deterministically reports insufficient context, which keeps local development offline. To generate substantive answers, configure an explicit structured-output-capable LLM. Enabling the OpenAI LLM provider sends the question and selected source snippets to OpenAI. See [grounded answering](docs/answering.md) and [provider privacy](docs/providers.md) before enabling a remote provider.
+The lower-level scanner, parser, provider, retrieval, and storage contracts are available for custom integrations. Provider extension requirements are documented in the [provider implementation guide](docs/providers.md#provider-implementation-guide).
 
-## Delivery principles
+## Persistence and consistency
 
-- Keep domain models and use cases independent from provider implementations.
-- Add tests with every behavior change; external AI services are never required by the default test suite.
-- Prefer a thin vertical slice before adding advanced retrieval or additional providers.
-- Do not execute or import code from indexed repositories.
-- Keep all source code, messages, configuration, and documentation in English.
-- Run `ruff`, `mypy`, and `pytest` at the end of every milestone.
+SQLite stores manifests, source chunks, references, and vectors in `.codeatlas/index.sqlite3` by default. Multiple repository snapshots can share one database because every operation is repository-scoped.
 
-## Milestone 1 — Foundation
+The manifest records repository identity, schema version, embedding profile, pipeline fingerprint, vector dimensions, file hashes, statistics, update time, and generation. Search requires the persisted generation and an exactly compatible embedding profile. Unsupported schemas produce an actionable error; automatic schema migration is not implemented.
 
-**Goal:** establish a maintainable Python project that contributors can install and validate locally.
+Indexes contain source code in plain text. Protect them with the same filesystem permissions and retention policy as the indexed repository.
 
-### Deliverables
+## Security guarantees
 
-- Create the `src/codeatlas` package and test layout.
-- Configure `pyproject.toml` with Python version, runtime dependencies, and development dependencies.
-- Configure Ruff, mypy, pytest, and coverage.
-- Define initial domain models with Pydantic:
-  - repository identity;
-  - indexed file metadata;
-  - parsed symbol;
-  - code chunk;
-  - source reference;
-  - search result.
-- Add domain-specific exception types.
-- Add configuration loading from `codeatlas.toml` and environment variables, without storing secrets in the project file.
-- Add structured logging with safe defaults.
-- Add `.gitignore`, `.env.example`, license, contribution guide, and a basic CI workflow.
-- Provide deterministic fake providers for later tests.
+- Repository paths are resolved and constrained to a repository-relative model.
+- Files are opened without following symlinks and accepted only when regular and within the size limit.
+- Binary, undecodable, oversized, generated, ignored, and unsafe control-character paths are skipped.
+- Python parsing uses `ast.parse`; repository modules are never imported or executed.
+- Incomplete scans caused by permission or `.gitignore` failures do not replace a valid index.
+- Provider and persistence failures do not publish partial generations.
+- Structured logs redact credentials and content-bearing fields such as source, prompts, questions, context, snippets, and model output.
+- The answer service treats indexed source as untrusted prompt data and validates citations independently of the model.
 
-### Tests
+See [Security policy](SECURITY.md) and [Known limitations](docs/limitations.md) for scope and reporting instructions.
 
-- Package import and version tests.
-- Domain-model validation tests.
-- Configuration precedence and validation tests.
-- Secret-redaction tests for logs and error messages.
+## Observability and failures
 
-### Exit criteria
+Normal structured logs include repository IDs, generation IDs, counts, batch progress, retry timing, context size, and citation state. They omit source text and remote request or response bodies.
 
-- `pip install -e ".[dev]"` succeeds.
-- `pytest`, `ruff check .`, and `mypy src` pass.
-- CI runs linting, type checking, tests, and coverage.
+Embedding batches run with bounded concurrency. After the first failure, queued batches do not start, active siblings are cancelled and awaited, and `PartialIndexingError` reports safe progress counts. Transient embedding retries use deterministic exponential backoff. Cancellation is never retried.
 
-## Milestone 2 — Repository Scanner and Python Parser
+CLI failures use stable process codes:
 
-**Goal:** turn a local repository into safe, traceable structural code units without executing its code.
+| Code | Meaning |
+| ---: | --- |
+| `0` | Success, empty search, or declined removal. |
+| `1` | Other expected CodeAtlas failure. |
+| `2` | Invalid CLI usage or validated input. |
+| `3` | Invalid or missing configuration. |
+| `4` | Invalid or inaccessible repository. |
+| `5` | Missing, incompatible, corrupted, or inaccessible index. |
+| `6` | Embedding or LLM provider failure. |
 
-### Deliverables
+## Performance
 
-- Implement a repository scanner that:
-  - validates and resolves the repository root;
-  - walks files without escaping the root through symlinks;
-  - ignores binary files, common dependency/build directories, and configured patterns;
-  - respects `.gitignore` where practical;
-  - supports configurable include and exclude patterns;
-  - records relative paths, language, size, modification time, and content hash.
-- Define a language-neutral parser protocol and parser registry.
-- Implement a Python parser with the standard-library AST.
-- Extract modules, classes, functions, async functions, methods, imports, docstrings, parent symbols, and exact line ranges.
-- Implement semantic chunking by symbol and module-level section.
-- Split exceptionally large symbols while preserving their source reference and parent relationship.
-
-### Tests
-
-- Scanner fixtures covering ignored files, binaries, nested paths, empty repositories, and symlinks.
-- Parser fixtures covering decorators, nested definitions, async functions, multiline signatures, docstrings, and syntax errors.
-- Chunking tests verifying source text, symbol relationships, and line-number accuracy.
-- Tests proving repository modules are never imported or executed.
-
-### Exit criteria
-
-- A Python repository can be scanned and converted into validated chunks.
-- Every chunk maps back to an existing relative file path and valid line range.
-- Unsupported and malformed files fail gracefully or are reported as skipped.
-
-## Milestone 3 — Indexing and Persistence
-
-**Goal:** create and maintain a local searchable index from parsed chunks.
-
-### Deliverables
-
-- Define `EmbeddingProvider` and `VectorStore` protocols.
-- Implement one production embedding provider behind the abstraction.
-- Implement deterministic fake embeddings for tests.
-- Select and implement a simple persistent local vector store.
-- Persist vectors together with chunk metadata and source references.
-- Build an indexing service that orchestrates scan → parse → chunk → embed → store.
-- Batch embedding requests and use async I/O only where it provides value.
-- Implement incremental indexing with file hashes:
-  - skip unchanged files;
-  - replace chunks for changed files;
-  - add new files;
-  - remove chunks belonging to deleted files.
-- Persist an index manifest containing repository identity, provider/model information, schema version, and indexing statistics.
-
-### Tests
-
-- Provider contract tests shared by real adapters and fakes where practical.
-- Vector persistence and metadata round-trip tests.
-- Indexing orchestration tests with fake providers.
-- Incremental indexing tests for unchanged, changed, new, and deleted files.
-- Failure tests for interrupted embedding batches and corrupted manifests.
-
-### Exit criteria
-
-- A repository can be indexed locally and reopened in a new process.
-- Reindexing an unchanged repository performs no embedding work.
-- Stored results retain accurate symbols, paths, and line ranges.
-
-## Milestone 4 — Retrieval
-
-**Goal:** retrieve the most relevant repository evidence without invoking an LLM.
-
-### Deliverables
-
-- Define retriever and reranker protocols independent of providers.
-- Implement semantic vector retrieval with configurable `top_k`.
-- Implement a small initial reranker, such as weighted similarity plus exact symbol/path matches.
-- Normalize and deduplicate overlapping results.
-- Enforce repository and index-version boundaries in every query.
-- Return scores, snippets, symbols, and first-class source references.
-- Add an application service for search that can be consumed by both the CLI and future interfaces.
-- Document extension points for BM25, dependency graphs, and cross-encoder reranking without implementing them yet.
-
-### Tests
-
-- Deterministic relevance-ordering tests.
-- Top-k, threshold, deduplication, and empty-result tests.
-- Repository-isolation tests.
-- Regression tests ensuring all returned references point to stored chunks.
-
-### Exit criteria
-
-- A natural-language query returns ranked, inspectable source snippets.
-- Retrieval works entirely without an LLM.
-- Results never cross repository boundaries or invent source locations.
-
-## Milestone 5 — Grounded LLM Answers
-
-**Goal:** generate useful answers that remain grounded in retrieved source code.
-
-### Deliverables
-
-- Define `LLMProvider`, `LLMRequest`, and `LLMResponse` abstractions.
-- Implement one production LLM adapter and a deterministic fake.
-- Build a context assembler with explicit token/size budgets.
-- Create prompts that require the model to:
-  - answer only from supplied context;
-  - distinguish facts from inference;
-  - state when evidence is insufficient;
-  - cite only allowed source references.
-- Define a structured answer model containing the answer, citations, confidence or limitations, and retrieved evidence identifiers.
-- Validate model-produced citations against retrieved references and reject or remove invalid citations.
-- Add timeouts and actionable provider error mapping.
-
-### Tests
-
-- Prompt and context-budget tests.
-- Structured-response parsing tests.
-- Invalid and fabricated citation tests.
-- Insufficient-context behavior tests.
-- Provider timeout and malformed-response tests.
-- End-to-end answering tests using fake embedding and LLM providers.
-
-### Exit criteria
-
-- A question produces a grounded answer with validated file and line references.
-- The system explicitly reports insufficient evidence instead of guessing.
-- No real API credentials are required for automated tests.
-
-## Milestone 6 — CLI and First Usable Release
-
-**Goal:** expose the complete workflow through a clear, stable command-line interface.
-
-### Deliverables
-
-- Implement a Typer-based CLI with:
-  - `codeatlas index <repository-path>`;
-  - `codeatlas search <query>`;
-  - `codeatlas ask <question>`;
-  - `codeatlas status`;
-  - `codeatlas clear`.
-- Resolve the active repository/index explicitly and consistently.
-- Add progress feedback for long-running index operations.
-- Present search results and answers with readable source references.
-- Map domain errors to helpful messages and stable non-zero exit codes.
-- Add confirmation for destructive index removal, plus a non-interactive flag for automation.
-- Complete installation, configuration, quick-start, and CLI documentation.
-
-### Tests
-
-- CLI help and command invocation tests.
-- Success and failure exit-code tests.
-- Tests for missing indexes, invalid paths, missing credentials, and provider failures.
-- End-to-end test: fixture repository → index → search → ask → cited answer.
-
-### Exit criteria
-
-- A new user can follow the README to install CodeAtlas, index a Python project, search it, and ask a grounded question.
-- CLI output includes real file paths and line ranges.
-- The definition-of-done workflow works with no undocumented setup.
-
-## Milestone 7 — Hardening and v0.1.0
-
-**Goal:** make the first release reliable, observable, secure, and ready for an open-source portfolio.
-
-### Deliverables
-
-- Review filesystem handling for traversal, symlink, permission, and large-file edge cases.
-- Ensure logs never expose credentials or full source/prompt content by default.
-- Add retry and backoff only for safe, transient provider operations.
-- Add index schema versioning and clear incompatible-index errors.
-- Add bounded concurrency, cancellation cleanup, and partial-failure reporting.
-- Measure indexing and retrieval on representative fixture repositories.
-- Improve documentation:
-  - architecture and Mermaid data-flow diagram;
-  - indexing lifecycle;
-  - retrieval and grounding guarantees;
-  - provider implementation guide;
-  - development and release instructions;
-  - privacy implications of remote providers.
-- Add changelog, release checklist, and Docker Compose only if the selected storage adapter requires it.
-
-### Tests
-
-- Security and path-handling regression tests.
-- Concurrency, retry, cancellation, and partial-failure tests.
-- Index migration/incompatibility tests.
-- Clean-environment installation smoke test.
-- Full CI matrix across supported Python versions and operating systems where practical.
-
-### Exit criteria
-
-- All quality gates pass from a clean checkout.
-- Documentation matches actual behavior and clearly explains data sent to external providers.
-- Known limitations are documented.
-- The project is ready to tag as `v0.1.0`.
-
-## Dependency sequence
-
-```mermaid
-flowchart LR
-    F[1. Foundation] --> P[2. Scanner and Parser]
-    P --> I[3. Indexing and Persistence]
-    I --> R[4. Retrieval]
-    R --> L[5. Grounded LLM Answers]
-    L --> C[6. CLI and First Usable Release]
-    C --> H[7. Hardening and v0.1.0]
-```
-
-The CLI milestone comes after the application services so command handlers stay thin. Minimal internal command harnesses may be used earlier for development, but the public CLI is stabilized only after indexing, retrieval, and answering contracts exist.
-
-## Scope after v0.1.0
-
-The following belong in later releases and should not delay the first usable version:
-
-- Tree-sitter and additional languages;
-- hybrid BM25 and vector retrieval;
-- symbol and dependency graphs;
-- cross-encoder or LLM reranking;
-- local LLM and Ollama adapters;
-- GitHub, pull request, and diff analysis;
-- MCP server, web UI, and IDE integrations;
-- architecture visualization, ownership analysis, and duplicate-code detection.
-
-## Release definition of done
-
-The initial release is complete when a developer can run:
+The included offline benchmark generates 250 Python files and 500 chunks, then measures cold indexing, unchanged reindexing, and 100 searches:
 
 ```bash
-codeatlas index ./some-python-project
-codeatlas ask "How does this project authenticate users?"
+python benchmarks/benchmark_local.py
 ```
 
-and receive a grounded answer containing validated references to real files, symbols, and line ranges. Tests, linting, type checking, documentation, installation instructions, and secret-handling checks must all pass before release.
+The committed reference run measured approximately 0.108 seconds for cold indexing, 0.060 seconds for an unchanged reindex, a 0.026-second mean search, and a 0.032-second p95 search under Python 3.14.8 on Linux/WSL2. These values are a regression reference rather than a performance guarantee. See [Performance](docs/performance.md) for the methodology and scaling constraints.
+
+## Development
+
+Run all quality gates before submitting a change:
+
+```bash
+ruff check .
+ruff format --check .
+mypy src tests benchmarks
+pytest -W error
+python -m build
+```
+
+The test suite uses deterministic or simulated providers and requires no network credentials. CI runs the suite on Python 3.11–3.13 under Linux and Python 3.13 under macOS, then builds and smoke-tests the wheel in a clean environment.
+
+Contribution and release procedures are in [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md), and [RELEASE.md](RELEASE.md).
+
+## Documentation
+
+- [CLI reference](docs/cli.md)
+- [Architecture and trust boundaries](docs/architecture.md)
+- [Scanning, parsing, indexing, and persistence](docs/indexing.md)
+- [Retrieval and ranking](docs/retrieval.md)
+- [Grounded answering](docs/answering.md)
+- [Providers and privacy](docs/providers.md)
+- [Performance](docs/performance.md)
+- [Known limitations](docs/limitations.md)
+- [Security policy](SECURITY.md)
+
+## License
+
+CodeAtlas is available under the [MIT License](LICENSE).

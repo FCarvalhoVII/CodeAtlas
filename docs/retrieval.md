@@ -1,6 +1,6 @@
 # Retrieval and ranking
 
-Milestone 4 provides repository-scoped search without an LLM. `SearchService` embeds a natural-language query with the same embedding profile used during indexing, retrieves exact cosine candidates from SQLite, reranks them with stored metadata, removes near-duplicate ranges, and returns validated evidence.
+CodeAtlas provides repository-scoped search without an LLM. `SearchService` embeds a natural-language query with the same embedding profile used during indexing, retrieves exact cosine candidates from SQLite, reranks them with stored metadata, removes near-duplicate ranges, and returns validated evidence.
 
 ```mermaid
 flowchart LR

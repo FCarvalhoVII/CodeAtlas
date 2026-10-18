@@ -1,6 +1,6 @@
 # Repository scanning and structural preparation
 
-Milestone 2 provides an in-process API for discovering source and producing traceable chunks. Embedding, persistence, and the public CLI follow in later milestones.
+CodeAtlas provides an in-process API for discovering source and producing traceable chunks, followed by incremental embedding and atomic persistence.
 
 ```python
 from pathlib import Path
@@ -54,7 +54,7 @@ Every chunk carries repository identity, language, kind, and a source reference.
 
 ## Incremental indexing and persistence
 
-`IndexingService` orchestrates discovery, preparation, batched asynchronous embeddings, and storage. `create_indexing_service(load_settings())` assembles the configured embedding provider, chunker, and SQLite store. The factory uses `index.max_chunk_lines=100`; constructing `SemanticChunker` directly retains its 200-line default.
+`IndexingService` orchestrates discovery, preparation, batched asynchronous embeddings, and storage. `create_indexing_service(load_settings())` assembles the configured embedding provider, chunker, and SQLite store. The factory uses `index.max_chunk_lines=100`; constructing `SemanticChunker` directly retains its 200-line default. `index.max_concurrency` bounds active embedding batches to four by default.
 
 ```python
 import asyncio
@@ -66,7 +66,7 @@ from codeatlas.storage.sqlite import SQLiteVectorStore
 
 store = SQLiteVectorStore(Path(".codeatlas/index.sqlite3"))
 provider = FakeEmbeddingProvider()
-service = IndexingService(provider, store, batch_size=32)
+service = IndexingService(provider, store, batch_size=32, max_concurrency=4)
 manifest = asyncio.run(service.index(Path("./my-project")))
 
 snapshot = store.load(manifest.repository.repository_id)
@@ -80,7 +80,7 @@ For a compatible index, unchanged hashes reuse existing vectors without parsing 
 
 Changing provider, model, configured dimensions, scanner options, chunk size, or pipeline version rebuilds the repository's embeddings. Custom parser registries must supply a new `pipeline_version` when behavior changes. When remote dimensions are unspecified, the first vector establishes the dimension and all subsequent vectors must match. Nonfinite, zero, inconsistent, or missing vectors fail the run.
 
-All embedding batches finish before a write transaction starts. SQLite atomically replaces one repository's vectors and manifest. A failed batch, cancellation, validation error, or failed database transaction leaves the preceding generation intact. Optimistic generation checks reject a writer whose base generation was replaced by another indexing run. Cancellation during the HTTP adapter's blocking worker does not stop an already-started remote request, but no snapshot is published from a cancelled run.
+All embedding batches finish before a write transaction starts. A semaphore bounds active requests; after the first failure, queued tasks do not start and active siblings are cancelled and awaited. `PartialIndexingError` reports the failed batch, total batches, and number completed without including provider details or source. SQLite atomically replaces one repository's vectors and manifest. A failed batch, cancellation, validation error, or failed database transaction leaves the preceding generation intact. Optimistic generation checks reject a writer whose base generation was replaced by another indexing run. Cancellation during the HTTP adapter's blocking worker does not stop an already-started remote request, but no snapshot is published from a cancelled run.
 
 `VectorStore` is an infrastructure-neutral protocol. The initial `SQLiteVectorStore` stores JSON payloads in SQLite tables and computes exact cosine similarity in Python, restricted to an explicit repository ID. Multiple repositories can share a database. The adapter validates persisted manifests, repository ownership, dimensions, chunk counts, and parent existence on read. Unsupported schema versions fail explicitly; automatic migrations are not implemented.
 

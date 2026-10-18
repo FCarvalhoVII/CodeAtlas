@@ -1,6 +1,6 @@
 # Grounded answering
 
-Milestone 5 turns retrieved evidence into a structured answer without trusting the model to create source locations. The model selects opaque chunk IDs; CodeAtlas verifies those IDs against the bounded context and resolves citations from stored metadata.
+CodeAtlas turns retrieved evidence into a structured answer without trusting the model to create source locations. The model selects opaque chunk IDs; CodeAtlas verifies those IDs against the bounded context and resolves citations from stored metadata.
 
 ```mermaid
 flowchart LR
