@@ -2,7 +2,7 @@
 
 CodeAtlas will be built as a sequence of small, independently verifiable milestones. Each milestone must leave the repository in a working state: tests pass, public behavior is documented, and no later milestone is required to validate completed work.
 
-> **Current status:** Milestones 1–5 are implemented: Foundation, Repository Scanner and Python Parser, Indexing and Persistence, Retrieval, and Grounded LLM Answers. Python APIs can index a repository, retrieve evidence, and produce structured answers whose citations are resolved to stored source references. The public CLI follows in Milestone 6.
+> **Current status:** Milestones 1–6 are implemented. CodeAtlas can scan and incrementally index a Python repository, retrieve evidence, produce grounded answers with validated citations, and expose the complete workflow through a stable CLI. Hardening and the `v0.1.0` release follow in Milestone 7.
 
 ## Development setup
 
@@ -32,6 +32,32 @@ CODEATLAS_OPENAI_API_KEY=your-key
 ```
 
 Credentials and secret-like values are rejected in `codeatlas.toml`; provide them through environment variables. CodeAtlas does not automatically load `.env` files, preventing an unexpected local file from changing runtime behavior.
+
+## Quick start
+
+Index the current repository with the default deterministic, offline providers:
+
+```bash
+codeatlas index .
+codeatlas status
+codeatlas search "Where is configuration loaded?"
+codeatlas ask "How is configuration loaded?"
+```
+
+The default fake LLM reports insufficient context by design. To receive substantive grounded answers, select an LLM in `codeatlas.toml` and provide its credential through the environment. For example:
+
+```toml
+[llm]
+provider = "openai"
+model = "your-structured-output-capable-model"
+```
+
+```bash
+export CODEATLAS_OPENAI_API_KEY=your-key
+codeatlas ask "How is configuration loaded?"
+```
+
+`search`, `ask`, `status`, and `clear` use the current directory as the repository unless `--repository PATH` is supplied. All commands read `./codeatlas.toml` by default; use `--config PATH` to select another file. The SQLite storage path is resolved from the directory where the command runs. See the [CLI guide](docs/cli.md) for output, exit codes, automation, and troubleshooting.
 
 ## Scan and prepare a Python repository
 
