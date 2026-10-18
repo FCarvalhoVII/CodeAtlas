@@ -1,0 +1,22 @@
+{
+  "environment": {
+    "platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+    "processor": "x86_64",
+    "python": "3.14.8"
+  },
+  "fixture": {
+    "chunks": 500,
+    "python_files": 250,
+    "queries": 100
+  },
+  "measurements_seconds": {
+    "cold_index": 0.108183,
+    "search_mean": 0.025818,
+    "search_p95": 0.031965,
+    "unchanged_index": 0.059955
+  },
+  "verification": {
+    "unchanged_embedding_batches": 0,
+    "unchanged_files": 250
+  }
+}
